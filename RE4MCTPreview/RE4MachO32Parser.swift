@@ -78,7 +78,8 @@ public struct RE4MachO32Symbol {
     public let description: UInt16
     public let value: UInt32
     public var isExternal: Bool { type & 0x01 != 0 }
-    public var isUndefined: Bool { (type & 0x0E) == 0 }
+    /// N_STAB records share some low type bits with N_UNDF; exclude them explicitly.
+    public var isUndefined: Bool { (type & 0xE0) == 0 && (type & 0x0E) == 0 }
     public var isWeakReference: Bool { description & 0x0040 != 0 }
     public var isWeakDefinition: Bool { description & 0x0080 != 0 }
 }
@@ -170,7 +171,9 @@ public struct RE4MachO32Image {
 
     public var undefinedSymbols: [RE4MachO32Symbol] {
         var seen = Set<String>()
-        return symbols.filter { $0.isUndefined && !$0.name.isEmpty && seen.insert($0.name).inserted }
+        return symbols.filter {
+            $0.isUndefined && $0.isExternal && !$0.name.isEmpty && seen.insert($0.name).inserted
+        }
     }
 
     public var importNames: [String] {
