@@ -125,3 +125,6 @@ The UI has a read-only audit preset for address `0x00011FC0`, the address static
 The ARMv6 static entry analyzer now resolves a known register-offset `LDR` whose base is `PC`, using the ARM architectural PC value (instruction address + 8), U bit, and shifted-register offset. It records the effective address, loaded word, and containing segment/section when known. It also annotates exact defined-symbol labels for direct branch/call targets and drops caller-saved register assumptions after an unconditional `BL`, so stale pre-call values are not silently propagated. Unknown/overflowing load addresses clear the destination register from the static state.
 
 A synthetic self-test writes generated ARM instructions and a marker word into zero-filled guest memory, then verifies that `LDR r1,[pc,r0]` reads the expected address/value. It performs static reading only: no synthetic instruction is executed. This is particularly relevant to the Res4 `_main` path, which uses `LDR [PC, Rm]` after loading offset values from its literal pool.
+
+
+The static disassembler also recognizes ARM block-transfer instructions such as the _main prologue `0xE92D40F0`, reporting `STMDB sp!, {r4, r5, r6, r7, lr}` instead of an opaque `.word`. A synthetic assertion covers this encoding.

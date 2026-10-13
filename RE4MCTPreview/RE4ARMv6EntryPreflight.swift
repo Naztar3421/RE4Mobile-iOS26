@@ -222,6 +222,19 @@ public enum RE4ARMv6EntryPreflight {
             }
             return "\(operation) \(rd), [\(rn)]\(offset.map { ", " + $0 } ?? "")"
         }
+        if ((word >> 25) & 7) == 4 {
+            let load = word & (1 << 20) != 0
+            let pre = word & (1 << 24) != 0
+            let up = word & (1 << 23) != 0
+            let writeback = word & (1 << 21) != 0
+            let mode = pre ? (up ? "IB" : "DB") : (up ? "IA" : "DA")
+            let base = entryRegName((word >> 16) & 0xF)
+            let list = (0..<16)
+                .filter { word & (1 << $0) != 0 }
+                .map { entryRegName(UInt32($0)) }
+                .joined(separator: ", ")
+            return "\(load ? "LDM" : "STM")\(mode) \(base)\(writeback ? "!" : ""), {\(list)}"
+        }
         if ((word >> 26) & 3) == 0 {
             let opcode = Int((word >> 21) & 0xF)
             let name = entryDataOpNames[opcode]
@@ -558,6 +571,7 @@ public enum RE4ARMv6EntryPreflight {
         let report = try inspect(entryPoint: image.entryPoint!, image: image, memory: memory, instructionCount: 3)
         let targetReport = try inspectAddress(image.entryPoint!, label: "synthetic entry",
                                               image: image, memory: memory, maxInstructions: 3)
+        let prologue = entryDescribe(0xE92D40F0, at: 0x11FC0)
         let first = classify(0xE3A00001, at: 0x1270)
         let second = classify(0xE2800002, at: 0x1274)
         let third = classify(0xE12FFF1E, at: 0x1278)
@@ -577,6 +591,7 @@ public enum RE4ARMv6EntryPreflight {
               flow.contains("ADD r0, r0, #0x2"),
               flow.contains("BX lr"),
               flow.contains("Guest execution performed: NO"),
+              prologue == "STMDB sp!, {r4, r5, r6, r7, lr}",
               first.instructionClass == .dataProcessing,
               second.instructionClass == .dataProcessing,
               third.instructionClass == .branchExchange,
