@@ -25,7 +25,7 @@ jobs:
         run: xcodegen generate
       - name: Validate four synthetic MCT formats byte-for-byte
         run: bash tools/validate-synthetic-mct.sh
-      - name: Validate thin and universal 32-bit ARM Mach-O parser
+      - name: Validate Mach-O parser and segment mapper
         run: bash tools/validate-mach-o32.sh
       - name: Build unsigned app
         run: |

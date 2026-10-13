@@ -26,7 +26,7 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
 
 /// Bounds-checked, little-endian 32-bit guest address space.
 /// All address access is copied through this object; it never returns host pointers.
-public final class RE4GuestARMv6Memory: RE4GuestMemoryReading {
+public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMapping {
     public let size: Int
     public let stackTop: UInt32
     public let returnSentinel: UInt32
@@ -65,6 +65,11 @@ public final class RE4GuestARMv6Memory: RE4GuestMemoryReading {
     public func writeBytes(at guestAddress: UInt32, data: Data) throws {
         let range = try checkedRange(guestAddress, data.count)
         bytes.replaceSubrange(range, with: data)
+    }
+
+    public func zeroBytes(at guestAddress: UInt32, count: Int) throws {
+        let range = try checkedRange(guestAddress, count)
+        for index in range { bytes[index] = 0 }
     }
 
     public func read8(_ address: UInt32) throws -> UInt8 {

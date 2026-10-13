@@ -26,7 +26,11 @@ struct ContentView: View {
     @State private var exportMessage = ""
     @State private var armv6SelfTestMessage = ""
     @State private var machOTestMessage = ""
+    @State private var machOMapTestMessage = ""
     @State private var machOReportMessage = ""
+    @State private var machOMapReportMessage = ""
+    @State private var loadedMachOImage: RE4MachO32Image?
+    @State private var mappedMachOMemory: RE4GuestARMv6Memory?
 
     var body: some View {
         ScrollView {
@@ -152,6 +156,40 @@ struct ContentView: View {
             }
 
             Button {
+                do {
+                    machOMapTestMessage = try RE4MachO32Loader.runSyntheticSelfTest()
+                } catch {
+                    machOMapTestMessage = "Mach-O segment mapper self-test FAIL\n\(error.localizedDescription)"
+                }
+            } label: {
+                Label("Mach-O Segment Mapper 自測", systemImage: "memorychip")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOMapTestMessage.isEmpty {
+                Text(machOMapTestMessage)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(machOMapTestMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                activeSheet = .machOLoadImporter
+            } label: {
+                Label("載入 Mach-O 至 Guest Memory", systemImage: "memorychip.fill")
+            }
+            .buttonStyle(.bordered)
+
+            if !machOMapReportMessage.isEmpty {
+                Text(machOMapReportMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
                 activeSheet = .machOImporter
             } label: {
                 Label("檢查 Mach-O 執行檔", systemImage: "doc.text.magnifyingglass")
@@ -206,6 +244,37 @@ struct ContentView: View {
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
+            case .machOLoadImporter:
+                MCTDocumentPicker { result in
+                    activeSheet = nil
+                    switch result {
+                    case .picked(let url):
+                        do {
+                            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+                            let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
+                            guard size > 0, size <= 512 * 1024 * 1024 else {
+                                throw NSError(domain: "RE4MachOLoader", code: 1,
+                                              userInfo: [NSLocalizedDescriptionKey: "檔案大小必須介於 1 byte 與 512 MiB。"])
+                            }
+                            let binary = try Data(contentsOf: url, options: .mappedIfSafe)
+                            let image = try RE4MachO32Parser.parse(binary)
+                            mappedMachOMemory = nil
+                            loadedMachOImage = nil
+                            let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
+                            let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)
+                            loadedMachOImage = image
+                            mappedMachOMemory = guestMemory
+                            machOMapReportMessage = "檔案：\(url.lastPathComponent)\n\(mapResult.report)"
+                        } catch {
+                            machOMapReportMessage = "Mach-O segment mapping 失敗：\(url.lastPathComponent)\n\(error.localizedDescription)\n請選取 IPA 解壓後 .app 內的主執行檔，不是 IPA ZIP。"
+                        }
+                    case .failed(let message):
+                        machOMapReportMessage = "檔案選取失敗：\(message)"
+                    case .cancelled:
+                        machOMapReportMessage = "已取消 Mach-O segment mapping。"
+                    }
+                }
+                .ignoresSafeArea()
             case .machOImporter:
                 MCTDocumentPicker { result in
                     activeSheet = nil
@@ -291,12 +360,14 @@ struct ContentView: View {
 private enum PreviewSheet: Identifiable {
     case importer
     case machOImporter
+    case machOLoadImporter
     case sharePNG(URL)
 
     var id: String {
         switch self {
         case .importer: return "importer"
         case .machOImporter: return "macho-importer"
+        case .machOLoadImporter: return "macho-load-importer"
         case .sharePNG(let url): return "share-\(url.lastPathComponent)"
         }
     }

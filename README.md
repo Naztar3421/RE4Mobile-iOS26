@@ -62,3 +62,10 @@ The app's ARMv6 核心指令自測 runs a generated, asset-free instruction sequ
 RE4MachO32Parser.swift parses thin and universal FAT 32-bit ARM Mach-O headers, LC_SEGMENT/sections, LC_UNIXTHREAD ARM PC, LC_MAIN entry offsets, dylib dependencies, nlist undefined symbols, indirect symbol pointer/stub imports, section relocations, and classic dyld bind/weak/lazy bind streams. It creates a bounds/overlap-checked guest-memory load plan but does not apply relocations/binds or execute the file.
 
 The on-device **Mach-O 32-bit ARM 解析器自測** uses a generated fixture (thin ARMv6 and universal FAT wrapper) containing synthetic segments, a dylib, an undefined _malloc symbol, an indirect pointer, an external relocation and a dyld bind stream. **檢查 Mach-O 執行檔** accepts a raw executable copied from an extracted `.app`; the IPA ZIP itself is not a Mach-O image. No original game binary or asset is committed.
+
+
+## Mach-O segment mapper — incremental milestone
+
+`RE4MachO32Loader.swift` maps validated segments at their declared guest virtual addresses, excludes `__PAGEZERO`, clears each full VM range, copies the file-backed prefix, and reports zero-fill bytes. It checks that the entry PC is within a mapped executable segment and refuses invalid memory/file ranges. Segment protections are reported, not enforced.
+
+The on-device **Mach-O Segment Mapper 自測** uses a generated asset-free ARMv6 Mach-O fixture to verify `__TEXT`, `__DATA`, `__LINKEDIT` mapping, entry opcodes, zero-fill clearing, file offsets, and rejection when guest memory is too small. **載入 Mach-O 至 Guest Memory** accepts a raw main executable extracted from the app bundle, selects its 32-bit ARM slice and maps it into the 80 MiB guest address space, retaining image and memory for follow-on work. This step does not apply relocations/binds, resolve imports/HLE, run initializers, or execute guest code.

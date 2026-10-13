@@ -834,6 +834,11 @@ public enum RE4MachO32Parser {
         return Data(fat)
     }
 
+    /// Generated test fixture with no game assets, shared by the parser and mapper tests.
+    public static func makeSyntheticSelfTestFixture() throws -> Data {
+        try syntheticFixture()
+    }
+
     public static func runSyntheticSelfTest() throws -> String {
         let thinData = try syntheticFixture()
         let thin = try parse(thinData)
