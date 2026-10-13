@@ -69,8 +69,7 @@ struct ContentView: View {
         .padding()
         .fileImporter(
             isPresented: $showingImporter,
-            // The document picker does not always recognize custom .mct UTI declarations.
-            // Permit any file here, then validate the extension ourselves.
+            // Use the custom document type declared in RE4MCTPreview-Info.plist.
             allowedContentTypes: [.re4MCT],
             allowsMultipleSelection: false
         ) { result in
@@ -139,6 +138,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
         var onResult: (MCTPreviewInfo?, String?) -> Void
         private var renderer: RE4MetalTexturePreviewRenderer?
         private var loadedHash: String?
+        private var loadedInfo: MCTPreviewInfo?
 
         init(onResult: @escaping (MCTPreviewInfo?, String?) -> Void) {
             self.onResult = onResult
@@ -146,7 +146,14 @@ private struct MCTMetalPreview: UIViewRepresentable {
 
         func load(_ data: Data, into view: MTKView) {
             let sourceHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            if loadedHash == sourceHash { return }
+            if loadedHash == sourceHash, let loadedInfo {
+                // An imported file can be byte-identical to the built-in fixture.
+                // Still report success after its display name/source changes.
+                DispatchQueue.main.async { [weak self] in
+                    self?.onResult(loadedInfo, nil)
+                }
+                return
+            }
             do {
                 let decoded = try RE4MCTTextureDecoder.decode(data)
                 guard let device = view.device ?? MTLCreateSystemDefaultDevice() else {
@@ -192,6 +199,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
                     rgbaBytes: decoded.rgba8.count,
                     sha256: sourceHash
                 )
+                loadedInfo = info
                 // Deferring this callback avoids mutating SwiftUI @State while
                 // UIViewRepresentable is in makeUIView/updateUIView.
                 DispatchQueue.main.async { [weak self] in
