@@ -818,8 +818,10 @@ public enum RE4MachO32Parser {
             throw RE4MachO32Error.syntheticSelfTestFailed("synthetic load commands overlap segment data")
         }
         file.replaceSubrange(28..<(28 + commands.count), with: commands)
-        // Generated instruction bytes; they are not executed by the parser test.
-        put32(&file, 0x270, 0xE12FFF1E)
+        // Generated instruction stream for static inspection tests; never game code.
+        put32(&file, 0x270, 0xE3A00001) // MOV r0, #1
+        put32(&file, 0x274, 0xE2800002) // ADD r0, r0, #2
+        put32(&file, 0x278, 0xE12FFF1E) // BX lr
         // Two nlist records at __LINKEDIT file offset 0x2C0.
         put32(&file, 0x2C0, 1); file[0x2C4] = 0x0F; file[0x2C5] = 1; put32(&file, 0x2C8, 0x1270)
         put32(&file, 0x2CC, 8); file[0x2D0] = 0x01; file[0x2D1] = 0; put32(&file, 0x2D4, 0)

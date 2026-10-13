@@ -122,7 +122,7 @@ public enum RE4MachO32Loader {
               result.fileBytesCopied==0x340,result.zeroFillBytes==0x2CC0 else {
             throw RE4MachO32LoaderTestError.failed("segment order, entry PC, or byte counts")
         }
-        guard try memory.copyBytes(at:result.entryPoint,count:4)==Data([0x1E,0xFF,0x2F,0xE1]) else {
+        guard try memory.copyBytes(at:result.entryPoint,count:4)==Data([0x01,0x00,0xA0,0xE3]) else {
             throw RE4MachO32LoaderTestError.failed("entry instruction mapped to wrong address")
         }
         guard try memory.copyBytes(at:0x3100,count:1)==Data([0]) else {

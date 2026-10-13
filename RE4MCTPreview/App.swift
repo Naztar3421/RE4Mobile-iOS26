@@ -32,6 +32,7 @@ struct ContentView: View {
     @State private var machOImportPlanTestMessage = ""
     @State private var machOImportPlanReportMessage = ""
     @State private var machOHLEBindingReportMessage = ""
+    @State private var machOEntryPreflightMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
     @State private var loadedMachOImage: RE4MachO32Image?
@@ -276,6 +277,31 @@ struct ContentView: View {
                 Label("套用已支援的 HLE 匯入繫結", systemImage: "link")
             }
             .buttonStyle(.bordered)
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory, let entry = image.entryPoint {
+                    do {
+                        machOEntryPreflightMessage = try RE4ARMv6EntryPreflight.inspect(
+                            entryPoint: entry, image: image, memory: memory, instructionCount: 24
+                        )
+                    } catch {
+                        machOEntryPreflightMessage = "Entry PC 預檢失敗：\(error.localizedDescription)"
+                    }
+                } else {
+                    machOEntryPreflightMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("檢查 Entry PC 指令（不執行）", systemImage: "list.number")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOEntryPreflightMessage.isEmpty {
+                Text(machOEntryPreflightMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machOEntryPreflightMessage.contains("preflight PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
 
             Button {
                 activeSheet = .machOImporter

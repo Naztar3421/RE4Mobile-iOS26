@@ -85,3 +85,10 @@ RE4MachO32HLEBinder.swift assigns deterministic trap addresses to a deliberately
 RE4GuestARMv6HLEDispatcher is connected to the ARM core pre-fetch instruction hook. It emulates this subset using bounds-checked guest-memory copies and returns to the guest LR. The allocator is conservative: free does not recycle memory, and realloc allocates/copies instead of resizing in place. This is not a full POSIX/libSystem implementation.
 
 The synthetic HLE test maps a generated Mach-O, patches the _malloc lazy pointer, dispatches the trap through the ARM core, verifies return through LR, and then exercises _memset and _memcpy traps. The on-device button “套用已支援的 HLE 匯入繫結” patches only the already mapped in-memory Res4 image; it does not run its entry point or initializers.
+
+
+## ARMv6 entry-point static preflight
+
+`RE4ARMv6EntryPreflight.swift` inspects up to 64 ARM instruction words from a loaded executable entry point without executing them. It labels common branch, block-transfer, single-transfer, extra-transfer and data-processing encodings; records branch targets; and explicitly flags SVC/coprocessor or unclassified encodings as requiring review. A handler-class label is not a proof of full instruction semantics.
+
+The on-device “檢查 Entry PC 指令（不執行）” reads from the already mapped guest memory. The synthetic fixture entry stream is generated MOV r0,#1 / ADD r0,r0,#2 / BX lr, which is decoded by the self-test but never executed by this preflight. This step must pass before designing a bounded real-entry trace; it does not start the original game's entry point or run Objective-C initializers.
