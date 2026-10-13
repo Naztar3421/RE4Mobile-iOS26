@@ -157,7 +157,10 @@ public struct RE4MachO32Image {
     public let symbols: [RE4MachO32Symbol]
     public let bindRecords: [RE4MachO32BindRecord]
     public let indirectImports: [RE4MachO32IndirectImport]
+    /// Relocations stored in section records (separate from LC_DYSYMTAB tables).
     public let relocations: [RE4MachO32Relocation]
+    public let dynamicExternalRelocations: [RE4MachO32Relocation]
+    public let dynamicLocalRelocations: [RE4MachO32Relocation]
     public let entryPoint: UInt32?
     public let entryPointFileOffset: UInt64?
     public let fileBytes: Data
@@ -232,6 +235,7 @@ public struct RE4MachO32Image {
             "Segments：\(segments.count)；依賴 dylib：\(dependencies.count)",
             "Undefined symbols：\(undefinedSymbols.count)；dyld bind records：\(bindRecords.count)",
             "Indirect imports：\(indirectImports.count)；section relocations：\(relocations.count)",
+            "LC_DYSYMTAB external relocations：\(dynamicExternalRelocations.count)；local relocations：\(dynamicLocalRelocations.count)",
             "",
             "[Segments]"
         ]
@@ -248,6 +252,22 @@ public struct RE4MachO32Image {
             lines += ["", "[Imports / HLE inventory]"]
             lines += importNames.prefix(48)
             if importNames.count > 48 { lines.append("…（另有 \(importNames.count - 48) 個）") }
+        }
+        if !dynamicExternalRelocations.isEmpty {
+            lines += ["", "[LC_DYSYMTAB external relocations]"]
+            lines += dynamicExternalRelocations.prefix(16).map { r in
+                String(format: "%@ address=0x%08X type=%u pcrel=%@ length=%u symbol=%@",
+                       r.sectionName, UInt32(bitPattern: r.address), r.type,
+                       r.isPCRelative ? "yes" : "no", r.length, r.symbolName ?? "(local/scattered)")
+            }
+        }
+        if !dynamicLocalRelocations.isEmpty {
+            lines += ["", "[LC_DYSYMTAB local relocations]"]
+            lines += dynamicLocalRelocations.prefix(16).map { r in
+                String(format: "%@ address=0x%08X type=%u pcrel=%@ length=%u",
+                       r.sectionName, UInt32(bitPattern: r.address), r.type,
+                       r.isPCRelative ? "yes" : "no", r.length)
+            }
         }
         if !bindRecords.isEmpty {
             lines += ["", "[First dyld binds]"]
@@ -288,7 +308,14 @@ public enum RE4MachO32Parser {
     private static let lcMain: UInt32 = 0x80000028
 
     private struct SymtabCommand { let symoff: UInt32; let nsyms: UInt32; let stroff: UInt32; let strsize: UInt32 }
-    private struct DysymtabCommand { let indirectOffset: UInt32; let indirectCount: UInt32 }
+    private struct DysymtabCommand {
+        let indirectOffset: UInt32
+        let indirectCount: UInt32
+        let externalRelocationOffset: UInt32
+        let externalRelocationCount: UInt32
+        let localRelocationOffset: UInt32
+        let localRelocationCount: UInt32
+    }
     private struct BindStream { let offset: UInt32; let size: UInt32; let name: String }
     private struct FatSlice { let offset: UInt64; let size: UInt64; let cpu: UInt32; let subtype: UInt32 }
 
@@ -435,8 +462,14 @@ public enum RE4MachO32Parser {
                                        stroff: le32(b, position + 16), strsize: le32(b, position + 20))
             } else if command == lcDysymtab {
                 guard commandSize >= 80 else { throw RE4MachO32Error.malformedLoadCommand(index: commandIndex) }
-                dysymtab = DysymtabCommand(indirectOffset: le32(b, position + 56),
-                                           indirectCount: le32(b, position + 60))
+                dysymtab = DysymtabCommand(
+                    indirectOffset: le32(b, position + 56),
+                    indirectCount: le32(b, position + 60),
+                    externalRelocationOffset: le32(b, position + 64),
+                    externalRelocationCount: le32(b, position + 68),
+                    localRelocationOffset: le32(b, position + 72),
+                    localRelocationCount: le32(b, position + 76)
+                )
             } else if [lcLoadDylib, lcLoadWeakDylib, lcReexportDylib, lcLazyLoadDylib, lcLoadUpwardDylib].contains(command) {
                 guard commandSize >= 24 else { throw RE4MachO32Error.malformedDylibCommand }
                 let nameOffset = Int(le32(b, position + 8))
@@ -559,6 +592,22 @@ public enum RE4MachO32Parser {
             }
         }
 
+        let dynamicExternalRelocations: [RE4MachO32Relocation]
+        let dynamicLocalRelocations: [RE4MachO32Relocation]
+        if let dysymtab {
+            dynamicExternalRelocations = try parseRelocationTable(
+                b, offset: dysymtab.externalRelocationOffset, count: dysymtab.externalRelocationCount,
+                sourceName: "LC_DYSYMTAB extrel", symbols: symbols
+            )
+            dynamicLocalRelocations = try parseRelocationTable(
+                b, offset: dysymtab.localRelocationOffset, count: dysymtab.localRelocationCount,
+                sourceName: "LC_DYSYMTAB locrel", symbols: symbols
+            )
+        } else {
+            dynamicExternalRelocations = []
+            dynamicLocalRelocations = []
+        }
+
         var binds: [RE4MachO32BindRecord] = []
         for stream in bindStreams {
             let end = UInt64(stream.offset) + UInt64(stream.size)
@@ -581,9 +630,49 @@ public enum RE4MachO32Parser {
             cpuType: cpuType, cpuSubtype: subtype, fileType: fileType, flags: flags,
             commandCount: ncmds, wasUniversal: wasUniversal, selectedSliceOffset: sliceOffset,
             segments: segments, dependencies: dependencies, symbols: symbols, bindRecords: binds,
-            indirectImports: indirectImports, relocations: relocations, entryPoint: entry,
-            entryPointFileOffset: mainEntryOffset, fileBytes: Data(b)
+            indirectImports: indirectImports, relocations: relocations,
+            dynamicExternalRelocations: dynamicExternalRelocations,
+            dynamicLocalRelocations: dynamicLocalRelocations,
+            entryPoint: entry, entryPointFileOffset: mainEntryOffset, fileBytes: Data(b)
         )
+    }
+
+
+    private static func parseRelocationTable(_ bytes: [UInt8], offset: UInt32, count: UInt32,
+                                             sourceName: String,
+                                             symbols: [RE4MachO32Symbol]) throws -> [RE4MachO32Relocation] {
+        guard count > 0 else { return [] }
+        let byteCount = UInt64(count) * 8
+        guard UInt64(offset) + byteCount <= UInt64(bytes.count) else {
+            throw RE4MachO32Error.malformedSymbolTable
+        }
+        var result: [RE4MachO32Relocation] = []
+        result.reserveCapacity(Int(count))
+        for index in 0..<Int(count) {
+            let p = Int(offset) + index * 8
+            let first = le32(bytes, p)
+            let second = le32(bytes, p + 4)
+            if first & 0x80000000 != 0 {
+                result.append(RE4MachO32Relocation(
+                    sectionName: sourceName, address: Int32(first & 0x00FF_FFFF),
+                    symbolIndex: 0, isExternal: false, isPCRelative: first & 0x40000000 != 0,
+                    length: UInt8((first >> 28) & 3), type: UInt8((first >> 24) & 0xF),
+                    scattered: true, symbolName: nil
+                ))
+            } else {
+                let symbolIndex = second & 0x00FF_FFFF
+                let external = second & 0x08000000 != 0
+                let name = external && symbolIndex < UInt32(symbols.count) ? symbols[Int(symbolIndex)].name : nil
+                result.append(RE4MachO32Relocation(
+                    sectionName: sourceName, address: Int32(bitPattern: first),
+                    symbolIndex: symbolIndex, isExternal: external,
+                    isPCRelative: second & 0x01000000 != 0,
+                    length: UInt8((second >> 25) & 3), type: UInt8((second >> 28) & 0xF),
+                    scattered: false, symbolName: name
+                ))
+            }
+        }
+        return result
     }
 
     private static func parseBindStream(_ bytes: [UInt8], streamName: String,
@@ -790,6 +879,7 @@ public enum RE4MachO32Parser {
         var dysym = [UInt8](repeating: 0, count: 80)
         put32(&dysym, 0, lcDysymtab); put32(&dysym, 4, 80)
         put32(&dysym, 56, 0x300); put32(&dysym, 60, 1)
+        put32(&dysym, 64, 0x304); put32(&dysym, 68, 1) // LC_DYSYMTAB external relocation table
         commands += dysym
         let dylibName = Array("/usr/lib/libSystem.B.dylib".utf8) + [UInt8(0)]
         let dylibSize = (24 + dylibName.count + 3) & ~3
@@ -865,7 +955,11 @@ public enum RE4MachO32Parser {
             throw RE4MachO32Error.syntheticSelfTestFailed("indirect symbol pointer")
         }
         guard thin.relocations.contains(where: { $0.isExternal && $0.symbolName == "_malloc" }) else {
-            throw RE4MachO32Error.syntheticSelfTestFailed("external relocation")
+            throw RE4MachO32Error.syntheticSelfTestFailed("section external relocation")
+        }
+        guard thin.dynamicExternalRelocations.contains(where: { $0.isExternal && $0.symbolName == "_malloc" }),
+              thin.dynamicLocalRelocations.isEmpty else {
+            throw RE4MachO32Error.syntheticSelfTestFailed("LC_DYSYMTAB external/local relocation tables")
         }
         guard thin.bindRecords.contains(where: { $0.symbolName == "_malloc" && $0.dylibOrdinal == 1 && $0.vmAddress == 0x3000 }) else {
             throw RE4MachO32Error.syntheticSelfTestFailed("dyld bind stream")
