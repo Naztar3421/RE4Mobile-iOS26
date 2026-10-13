@@ -1,7 +1,11 @@
 import SwiftUI
+import UIKit
 import Metal
 import MetalKit
 import CryptoKit
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 
 @main
 struct RE4MCTPreviewApp: App {
@@ -13,13 +17,15 @@ struct RE4MCTPreviewApp: App {
 struct ContentView: View {
     @State private var mctData = SyntheticMCTFixture.makeCheckerboard()
     @State private var sourceName = "內建合成樣本"
-    @State private var showingImporter = false
+    @State private var activeSheet: PreviewSheet?
     @State private var blackAsTransparentPreview = false
     @State private var status = "等待貼圖解碼結果……"
     @State private var details = "啟動時先顯示內建合成測試，尚未匯入原版遊戲貼圖。"
+    @State private var exportMessage = ""
 
     var body: some View {
-        VStack(spacing: 14) {
+        ScrollView {
+            VStack(spacing: 14) {
             Text("RE4 MCT / Metal Preview")
                 .font(.title2.bold())
                 .multilineTextAlignment(.center)
@@ -46,6 +52,7 @@ struct ContentView: View {
             Text(details)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
 
@@ -64,14 +71,30 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
+            Button {
+                exportDecodedPNG()
+            } label: {
+                Label("匯出解碼後 RGBA8 PNG", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !exportMessage.isEmpty {
+                Text(exportMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             HStack(spacing: 12) {
                 Button("重新載入合成樣本") {
                     sourceName = "內建合成樣本"
                     mctData = SyntheticMCTFixture.makeCheckerboard()
+                    exportMessage = ""
                 }
                 .buttonStyle(.bordered)
 
-                Button("匯入 .mct") { showingImporter = true }
+                Button("匯入 .mct") { activeSheet = .importer }
                     .buttonStyle(.borderedProminent)
             }
             .font(.footnote)
@@ -80,38 +103,134 @@ struct ContentView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-        }
-        .padding()
-        .sheet(isPresented: $showingImporter) {
-            MCTDocumentPicker { result in
-                showingImporter = false
-                switch result {
-                case .picked(let url):
-                    guard url.pathExtension.lowercased() == "mct" else {
-                        status = "選到的不是 .mct 檔案"
-                        details = "選到：\(url.lastPathComponent)\n請選取副檔名為 .mct 的貼圖檔。"
-                        return
-                    }
-                    do {
-                        let imported = try Data(contentsOf: url)
-                        sourceName = url.lastPathComponent
-                        status = "已匯入 \(url.lastPathComponent)，正在解碼……"
-                        details = "檔案已複製到 App 暫存空間，正在解析 MCT 標頭與貼圖資料。"
-                        mctData = imported
-                    } catch {
-                        status = "讀取 MCT 失敗"
-                        details = error.localizedDescription
-                    }
-                case .failed(let message):
-                    status = "匯入失敗"
-                    details = message
-                case .cancelled:
-                    status = "已取消選取"
-                    details = "尚未匯入新的 MCT；目前仍顯示：\(sourceName)"
-                }
             }
-            .ignoresSafeArea()
+            .padding()
         }
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .importer:
+                MCTDocumentPicker { result in
+                    activeSheet = nil
+                    switch result {
+                    case .picked(let url):
+                        guard url.pathExtension.lowercased() == "mct" else {
+                            status = "選到的不是 .mct 檔案"
+                            details = "選到：\(url.lastPathComponent)\n請選取副檔名為 .mct 的貼圖檔。"
+                            return
+                        }
+                        do {
+                            let imported = try Data(contentsOf: url)
+                            sourceName = url.lastPathComponent
+                            status = "已匯入 \(url.lastPathComponent)，正在解碼……"
+                            details = "檔案已複製到 App 暫存空間，正在解析 MCT 標頭與貼圖資料。"
+                            exportMessage = ""
+                            mctData = imported
+                        } catch {
+                            status = "讀取 MCT 失敗"
+                            details = error.localizedDescription
+                        }
+                    case .failed(let message):
+                        status = "匯入失敗"
+                        details = message
+                    case .cancelled:
+                        status = "已取消選取"
+                        details = "尚未匯入新的 MCT；目前仍顯示：\(sourceName)"
+                    }
+                }
+                .ignoresSafeArea()
+            case .sharePNG(let url):
+                PreviewActivityView(activityItems: [url])
+            }
+        }
+    }
+
+    private func exportDecodedPNG() {
+        do {
+            let decoded = try RE4MCTTextureDecoder.decode(mctData)
+            let pngData = try MCTPNGExporter.makePNG(from: decoded)
+            let baseName = URL(fileURLWithPath: sourceName)
+                .deletingPathExtension()
+                .lastPathComponent
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("\(baseName)_decoded_rgba.png")
+            try pngData.write(to: outputURL, options: .atomic)
+            exportMessage = "已產生 \(decoded.width) × \(decoded.height) PNG（\(pngData.count) bytes）。可在分享面板選擇「儲存到檔案」。"
+            activeSheet = .sharePNG(outputURL)
+        } catch {
+            exportMessage = "PNG 匯出失敗：\(error.localizedDescription)"
+        }
+    }
+}
+
+private enum PreviewSheet: Identifiable {
+    case importer
+    case sharePNG(URL)
+
+    var id: String {
+        switch self {
+        case .importer: return "importer"
+        case .sharePNG(let url): return "share-\(url.lastPathComponent)"
+        }
+    }
+}
+
+private struct PreviewActivityView: UIViewControllerRepresentable {
+    let activityItems: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: activityItems, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+private enum MCTPNGExporter {
+    static func makePNG(from texture: RE4MCTTextureData) throws -> Data {
+        let expectedBytes = texture.width * texture.height * 4
+        guard texture.rgba8.count == expectedBytes else {
+            throw NSError(
+                domain: "RE4MCTPNGExporter",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "RGBA8 長度不符：\(texture.rgba8.count)，預期 \(expectedBytes) bytes。"]
+            )
+        }
+
+        guard let provider = CGDataProvider(data: texture.rgba8 as CFData) else {
+            throw NSError(domain: "RE4MCTPNGExporter", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "無法建立 PNG 像素資料提供者。"])
+        }
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue)
+            .union(.byteOrder32Big)
+        guard let image = CGImage(
+            width: texture.width,
+            height: texture.height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: texture.bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else {
+            throw NSError(domain: "RE4MCTPNGExporter", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "無法從 RGBA8 建立 CGImage。"])
+        }
+
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, UTType.png.identifier as CFString, 1, nil
+        ) else {
+            throw NSError(domain: "RE4MCTPNGExporter", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "無法建立 PNG 編碼器。"])
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            throw NSError(domain: "RE4MCTPNGExporter", code: 5,
+                          userInfo: [NSLocalizedDescriptionKey: "PNG 編碼未能完成。"])
+        }
+        return output as Data
     }
 }
 
