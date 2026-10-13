@@ -415,12 +415,79 @@ public enum RE4ARMv6EntryPreflight {
         return report.joined(separator: "\n")
     }
 
+
+    /// Inspect a statically inferred indirect-call target without executing it.
+    public static func inspectAddress(_ address: UInt32,
+                                      label: String,
+                                      image: RE4MachO32Image,
+                                      memory: RE4GuestMemoryReading,
+                                      maxInstructions: Int = 64) throws -> String {
+        guard let segment = image.segments.first(where: {
+            !$0.isPageZero && ($0.initialProtection & 4) != 0 &&
+            UInt64(address) >= UInt64($0.vmAddress) &&
+            UInt64(address) + 4 <= UInt64($0.vmAddress) + UInt64($0.vmSize)
+        }) else {
+            throw RE4ARMv6EntryPreflightError.entryNotInExecutableSegment(address)
+        }
+
+        let exactSymbols = image.symbols.filter {
+            !$0.isUndefined && $0.value == address && !$0.name.isEmpty
+        }.sorted { $0.name < $1.name }
+        let nearby = image.symbols.filter {
+            !$0.isUndefined && !$0.name.isEmpty && $0.value != 0 &&
+            UInt64($0.value) + 0x1000 >= UInt64(address) &&
+            UInt64($0.value) <= UInt64(address) + 0x1000
+        }.sorted {
+            if $0.value != $1.value { return $0.value < $1.value }
+            return $0.name < $1.name
+        }
+
+        var lines = [
+            "ARMv6 indirect target static audit PASS",
+            "Target label: \(label)",
+            String(format: "Target address: 0x%08X", address),
+            "Guest execution performed: NO",
+            "HLE dispatch performed: NO",
+            "Pointer/fixup application performed: NO",
+            "Executable segment: \(segment.name)",
+            "",
+            "[Exact defined symbols]"
+        ]
+        if exactSymbols.isEmpty {
+            lines.append("(no exact symbol-table name at this address)")
+        } else {
+            for symbol in exactSymbols.prefix(16) {
+                lines.append(String(format: "%@ value=0x%08X type=0x%02X section=%u desc=0x%04X",
+                                    symbol.name, symbol.value, symbol.type, symbol.section, symbol.description))
+            }
+        }
+        lines += ["", "[Nearby defined symbol labels (±0x1000) — not function boundaries]"]
+        if nearby.isEmpty {
+            lines.append("(none in symbol table window)")
+        } else {
+            for symbol in nearby.prefix(40) {
+                let relation = symbol.value == address ? "target" : (symbol.value < address ? "before" : "after")
+                lines.append(String(format: "%@ 0x%08X %@", relation, symbol.value, symbol.name))
+            }
+            if nearby.count > 40 { lines.append("… plus \(nearby.count - 40) more") }
+        }
+        lines += ["", "[Target instruction path]"]
+        lines.append(try inspectEntryControlFlow(
+            entryPoint: address, image: image, memory: memory, maxInstructions: maxInstructions
+        ))
+        lines.append("")
+        lines.append("Static target audit only: symbol values may be absent/stripped and are not proof of a function boundary. The target was not called.")
+        return lines.joined(separator: "\n")
+    }
+
     public static func runSyntheticSelfTest() throws -> String {
         let fixture = try RE4MachO32Parser.makeSyntheticSelfTestFixture()
         let image = try RE4MachO32Parser.parse(fixture)
         let memory = RE4GuestARMv6Memory(size: 0x05000000)
         _ = try RE4MachO32Loader.map(image, into: memory)
         let report = try inspect(entryPoint: image.entryPoint!, image: image, memory: memory, instructionCount: 3)
+        let targetReport = try inspectAddress(image.entryPoint!, label: "synthetic entry",
+                                              image: image, memory: memory, maxInstructions: 3)
         let first = classify(0xE3A00001, at: 0x1270)
         let second = classify(0xE2800002, at: 0x1274)
         let third = classify(0xE12FFF1E, at: 0x1278)
@@ -434,7 +501,10 @@ public enum RE4ARMv6EntryPreflight {
               report.contains("0x00001270  0xE3A00001") &&
               report.contains("0x00001274  0xE2800002") &&
               report.contains("0x00001278  0xE12FFF1E") &&
-              report.contains("Execution performed: NO") else {
+              report.contains("Execution performed: NO"),
+              targetReport.contains("ARMv6 indirect target static audit PASS"),
+              targetReport.contains("Guest execution performed: NO"),
+              targetReport.contains("[Target instruction path]") else {
             throw RE4ARMv6EntryPreflightError.selfTestFailed
         }
         return "ARMv6 entry-point preflight self-test PASS\nMOV/ADD/BX instruction words decoded at expected guest VAs.\nInstruction conditions and classes reported.\nStatic only: CPU state and guest memory were not executed."

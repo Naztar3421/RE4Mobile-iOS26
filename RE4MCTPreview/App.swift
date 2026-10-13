@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var machOImportPlanReportMessage = ""
     @State private var machOHLEBindingReportMessage = ""
     @State private var machOEntryPreflightMessage = ""
+    @State private var machOCallTargetAuditMessage = ""
     @State private var machOPointerFixupAuditMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
@@ -307,6 +308,32 @@ struct ContentView: View {
             Button {
                 if let image = loadedMachOImage, let memory = mappedMachOMemory {
                     do {
+                        machOCallTargetAuditMessage = try RE4ARMv6EntryPreflight.inspectAddress(
+                            0x00011FC0, label: "Entry BLX r12 target", image: image,
+                            memory: memory, maxInstructions: 64
+                        )
+                    } catch {
+                        machOCallTargetAuditMessage = "Call target audit failed：\(error.localizedDescription)"
+                    }
+                } else {
+                    machOCallTargetAuditMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("靜態檢查第一個呼叫目標 0x11FC0（不執行）", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOCallTargetAuditMessage.isEmpty {
+                Text(machOCallTargetAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machOCallTargetAuditMessage.contains("indirect target static audit PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    do {
                         machOPointerFixupAuditMessage = try RE4MachO32PointerFixupAudit.auditKnownRes4Entry(
                             image: image, memory: memory
                         )
@@ -403,6 +430,9 @@ struct ContentView: View {
                             loadedHLEBindingResult = nil
                             loadedHLEDispatcher = nil
                             machOHLEBindingReportMessage = ""
+                            machOEntryPreflightMessage = ""
+                            machOCallTargetAuditMessage = ""
+                            machOPointerFixupAuditMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)
                             loadedMachOImage = image

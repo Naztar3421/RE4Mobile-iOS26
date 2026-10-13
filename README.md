@@ -113,3 +113,8 @@ A zero pointer is not assumed to be null or to require relocation. The audit onl
 The Res4 pointer audit identifies `0x001C13E0` as a `__DATA,__nl_symbol_ptr` slot whose classic indirect symbol is the undefined external `_exit`. The zero in the on-disk slot is treated as unresolved import state, not as a resolved function pointer. Since this old-style image has no dyld bind stream, the indirect-symbol table plus symbol table is the relevant import inventory for a legacy binder; the presence/absence of a relocation record at the exact slot alone is not decisive.
 
 The HLE subset now includes `_exit`, but it never invokes host process termination. It requests a guest-runtime halt and returns a result with `halted=true`, `returned=false`, and the guest exit code. The synthetic test checks that this call stops only the emulator loop and does not return through LR or terminate the iOS app. This does not enable or initiate execution of Res4's real entry point.
+
+
+## First indirect entry target audit
+
+The UI has a read-only audit preset for address `0x00011FC0`, the address statically inferred from the entry path's first `BLX r12`. It reports exact defined symbol-table matches, nearby symbol labels (explicitly not function boundaries), and a bounded static instruction path starting at that address. It never calls the target, invokes HLE, changes pointer slots, or executes guest instructions. The address preset is tied to the tested Res4 ARMv6 slice.
