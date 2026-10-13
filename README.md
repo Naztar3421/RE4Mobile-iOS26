@@ -128,3 +128,10 @@ A synthetic self-test writes generated ARM instructions and a marker word into z
 
 
 The static disassembler also recognizes ARM block-transfer instructions such as the _main prologue `0xE92D40F0`, reporting `STMDB sp!, {r4, r5, r6, r7, lr}` instead of an opaque `.word`. A synthetic assertion covers this encoding.
+
+
+## Static call-path boundary and direct _main call targets
+
+The sequential ARMv6 inspection stops when an `LDM*` instruction loads `PC` from its register list, e.g. `LDMIA sp!, {r4, r5, r6, r7, pc}`. The stack and restored return address are not modeled, so bytes after that return sequence (which may be a literal pool) are not reported as reachable sequential instructions. A synthetic test verifies that a marker word immediately after the LDM return is not scanned.
+
+The UI also has a static audit preset for the two direct call targets seen in the inspected `_main` path: `0x001A0558` and `0x0019FC70`. Each report includes symbols near the target and a bounded instruction scan. Neither call target is invoked and no guest instructions execute.

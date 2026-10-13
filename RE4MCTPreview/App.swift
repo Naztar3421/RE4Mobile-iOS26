@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var machOHLEBindingReportMessage = ""
     @State private var machOEntryPreflightMessage = ""
     @State private var machOCallTargetAuditMessage = ""
+    @State private var machODirectCallAuditMessage = ""
     @State private var machOPointerFixupAuditMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
@@ -331,6 +332,40 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
 
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    var reports = [String]()
+                    for (address, label) in [
+                        (UInt32(0x001A0558), "_main direct BL target #1"),
+                        (UInt32(0x0019FC70), "_main direct BL target #2")
+                    ] {
+                        do {
+                            reports.append(try RE4ARMv6EntryPreflight.inspectAddress(
+                                address, label: label, image: image, memory: memory, maxInstructions: 64
+                            ))
+                        } catch {
+                            reports.append(String(format: "%@ 0x%08X audit failed: %@",
+                                                  label, address, error.localizedDescription))
+                        }
+                    }
+                    machODirectCallAuditMessage = reports.joined(separator: "\n\n========== NEXT DIRECT TARGET ==========\n\n")
+                } else {
+                    machODirectCallAuditMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("_main 直接呼叫目標 0x1A0558／0x19FC70（靜態）", systemImage: "arrow.triangle.branch")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machODirectCallAuditMessage.isEmpty {
+                Text(machODirectCallAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machODirectCallAuditMessage.contains("audit PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
             Button {
                 if let image = loadedMachOImage, let memory = mappedMachOMemory {
                     do {
@@ -432,6 +467,7 @@ struct ContentView: View {
                             machOHLEBindingReportMessage = ""
                             machOEntryPreflightMessage = ""
                             machOCallTargetAuditMessage = ""
+                            machODirectCallAuditMessage = ""
                             machOPointerFixupAuditMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)

@@ -321,6 +321,7 @@ public enum RE4ARMv6EntryPreflight {
         var transfers = [String]()
         var instructionCount = 0
         var stopBX: UInt32?
+        var stopLoadMultiplePC: UInt32?
         var pc = entryPoint
 
         for _ in 0..<limit {
@@ -442,6 +443,15 @@ public enum RE4ARMv6EntryPreflight {
             lines.append(String(format: "0x%08X  0x%08X  %@", pc, word, decoded))
             for annotation in annotations { lines.append("    " + annotation) }
             instructionCount += 1
+
+            // LDM/LDMIA/LDMFD that loads PC transfers control away from the linear stream.
+            // The static pass does not model SP/stack contents, so it cannot infer the restored PC.
+            if ((word >> 25) & 7) == 4,
+               word & (1 << 20) != 0,
+               word & (1 << 15) != 0 {
+                stopLoadMultiplePC = pc
+                break
+            }
             pc = pc &+ 4
         }
 
@@ -485,6 +495,8 @@ public enum RE4ARMv6EntryPreflight {
         report += transfers.isEmpty ? ["(none resolved)"] : transfers
         if let stopBX {
             report.append(String(format: "Linear fall-through stopped at unconditional BX 0x%08X; target not followed.", stopBX))
+        } else if let stopLoadMultiplePC {
+            report.append(String(format: "Linear scan stopped at LDM* 0x%08X because the register list restores PC; stack/return target not modeled. Subsequent bytes are not treated as reachable instructions.", stopLoadMultiplePC))
         } else {
             report.append("Stopped at instruction limit or executable-segment boundary.")
         }
@@ -586,7 +598,18 @@ public enum RE4ARMv6EntryPreflight {
         try memory.writeBytes(at: 0x1280, data: markerInstructions)
         try memory.writeBytes(at: 0x12A4, data: Data([0x78, 0x56, 0x34, 0x12]))
         let indexedFlow = try inspectEntryControlFlow(entryPoint: 0x1280, image: image, memory: memory, maxInstructions: 8)
-        guard indexedFlow.contains("PC-indexed LDR effective address = 0x000012A4; loaded 0x12345678"),
+
+        // LDMIA sp!, {r4, r5, r6, r7, pc} transfers control via restored PC.
+        let ldmReturn = Data([
+            0x01, 0x00, 0xA0, 0xE3, // 0x12B0 MOV r0,#1
+            0xF0, 0x80, 0xBD, 0xE8, // 0x12B4 LDMIA sp!,{r4,r5,r6,r7,pc}
+            0x00, 0x00, 0xA0, 0xE3  // 0x12B8 marker bytes must not be scanned as reachable code
+        ])
+        try memory.writeBytes(at: 0x12B0, data: ldmReturn)
+        let ldmFlow = try inspectEntryControlFlow(entryPoint: 0x12B0, image: image, memory: memory, maxInstructions: 8)
+        guard ldmFlow.contains("Linear scan stopped at LDM* 0x000012B4"),
+              !ldmFlow.contains("0x000012B8  0xE3A00000"),
+              indexedFlow.contains("PC-indexed LDR effective address = 0x000012A4; loaded 0x12345678"),
               indexedFlow.contains("0x000012A4: loaded 0x12345678"),
               flow.contains("ADD r0, r0, #0x2"),
               flow.contains("BX lr"),
