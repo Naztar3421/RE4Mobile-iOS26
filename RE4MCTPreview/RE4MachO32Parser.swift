@@ -759,14 +759,13 @@ public enum RE4MachO32Parser {
             appendLE32(&b, s[1]); appendLE32(&b, s[2]); appendLE32(&b, s[3])
             appendLE32(&b, s[4]); appendLE32(&b, s[5]); appendLE32(&b, s[6])
             appendLE32(&b, s[7]); appendLE32(&b, s[8]); appendLE32(&b, s[9])
-            appendLE32(&b, s[10])
         }
         return b
     }
 
     private static func syntheticFixture() throws -> Data {
-        let textSection: [UInt32] = [1, 0x1270, 8, 0x270, 2, 0x304, 1, 0x80000400, 0, 0, 0]
-        let dataSection: [UInt32] = [2, 0x3000, 4, 0x280, 2, 0, 0, 7, 0, 0, 0]
+        let textSection: [UInt32] = [1, 0x1270, 8, 0x270, 2, 0x304, 1, 0x80000400, 0, 0]
+        let dataSection: [UInt32] = [2, 0x3000, 4, 0x280, 2, 0, 0, 7, 0, 0]
         var commands = [UInt8]()
         commands += segmentCommand(name: "__TEXT", vmAddress: 0x1000, vmSize: 0x1000,
                                    fileOffset: 0, fileSize: 0x280, protection: 5, sections: [textSection])
