@@ -765,7 +765,7 @@ public enum RE4MachO32Parser {
     }
 
     private static func syntheticFixture() throws -> Data {
-        let textSection: [UInt32] = [1, 0x1270, 8, 0x30, 2, 0x304, 1, 0x80000400, 0, 0, 0]
+        let textSection: [UInt32] = [1, 0x1270, 8, 0x270, 2, 0x304, 1, 0x80000400, 0, 0, 0]
         let dataSection: [UInt32] = [2, 0x3000, 4, 0x280, 2, 0, 0, 7, 0, 0, 0]
         var commands = [UInt8]()
         commands += segmentCommand(name: "__TEXT", vmAddress: 0x1000, vmSize: 0x1000,
@@ -811,7 +811,7 @@ public enum RE4MachO32Parser {
         }
         file.replaceSubrange(28..<(28 + commands.count), with: commands)
         // Generated instruction bytes; they are not executed by the parser test.
-        put32(&file, 0x30, 0xE12FFF1E)
+        put32(&file, 0x270, 0xE12FFF1E)
         // Two nlist records at __LINKEDIT file offset 0x2C0.
         put32(&file, 0x2C0, 1); file[0x2C4] = 0x0F; file[0x2C5] = 1; put32(&file, 0x2C8, 0x1270)
         put32(&file, 0x2CC, 8); file[0x2D0] = 0x01; file[0x2D1] = 0; put32(&file, 0x2D4, 0)
