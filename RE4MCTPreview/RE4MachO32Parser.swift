@@ -765,7 +765,7 @@ public enum RE4MachO32Parser {
     }
 
     private static func syntheticFixture() throws -> Data {
-        let textSection: [UInt32] = [1, 0x1030, 8, 0x30, 2, 0x304, 1, 0x80000400, 0, 0, 0]
+        let textSection: [UInt32] = [1, 0x1270, 8, 0x30, 2, 0x304, 1, 0x80000400, 0, 0, 0]
         let dataSection: [UInt32] = [2, 0x3000, 4, 0x280, 2, 0, 0, 7, 0, 0, 0]
         var commands = [UInt8]()
         commands += segmentCommand(name: "__TEXT", vmAddress: 0x1000, vmSize: 0x1000,
@@ -794,7 +794,7 @@ public enum RE4MachO32Parser {
         commands += dylib
         var thread = [UInt8](repeating: 0, count: 84)
         put32(&thread, 0, lcUnixThread); put32(&thread, 4, 84)
-        put32(&thread, 8, 1); put32(&thread, 12, 17); put32(&thread, 76, 0x1030)
+        put32(&thread, 8, 1); put32(&thread, 12, 17); put32(&thread, 76, 0x1270)
         commands += thread
         let bindStream: [UInt8] = [0x11, 0x40] + Array("_malloc".utf8) + [0, 0x51, 0x71, 0, 0x90, 0]
         var dyld = [UInt8](repeating: 0, count: 48)
@@ -813,7 +813,7 @@ public enum RE4MachO32Parser {
         // Generated instruction bytes; they are not executed by the parser test.
         put32(&file, 0x30, 0xE12FFF1E)
         // Two nlist records at __LINKEDIT file offset 0x2C0.
-        put32(&file, 0x2C0, 1); file[0x2C4] = 0x0F; file[0x2C5] = 1; put32(&file, 0x2C8, 0x1030)
+        put32(&file, 0x2C0, 1); file[0x2C4] = 0x0F; file[0x2C5] = 1; put32(&file, 0x2C8, 0x1270)
         put32(&file, 0x2CC, 8); file[0x2D0] = 0x01; file[0x2D1] = 0; put32(&file, 0x2D4, 0)
         let strings = Array("\0_entry\0_malloc\0".utf8)
         file.replaceSubrange(0x2D8..<(0x2D8 + strings.count), with: strings)
@@ -836,7 +836,7 @@ public enum RE4MachO32Parser {
         let thinData = try syntheticFixture()
         let thin = try parse(thinData)
         guard thin.architectureName == "ARMv6" else { throw RE4MachO32Error.syntheticSelfTestFailed("CPU subtype") }
-        guard thin.entryPoint == 0x1030 else { throw RE4MachO32Error.syntheticSelfTestFailed("entry PC") }
+        guard thin.entryPoint == 0x1270 else { throw RE4MachO32Error.syntheticSelfTestFailed("entry PC") }
         guard thin.segments.map(\.name) == ["__TEXT", "__DATA", "__LINKEDIT"] else {
             throw RE4MachO32Error.syntheticSelfTestFailed("segment order/names")
         }
@@ -856,7 +856,7 @@ public enum RE4MachO32Parser {
             throw RE4MachO32Error.syntheticSelfTestFailed("dyld bind stream")
         }
         let plan = try thin.makeLoadPlan(guestMemorySize: 0x6000)
-        guard plan.requiredMemorySize == 0x5000 && plan.entryPoint == 0x1030 else {
+        guard plan.requiredMemorySize == 0x5000 && plan.entryPoint == 0x1270 else {
             throw RE4MachO32Error.syntheticSelfTestFailed("guest mapping plan")
         }
         do {
@@ -865,7 +865,7 @@ public enum RE4MachO32Parser {
         } catch RE4MachO32Error.segmentOutOfBounds { }
 
         let fat = try parse(wrapFat(thinData))
-        guard fat.wasUniversal, fat.selectedSliceOffset == 0x100, fat.entryPoint == 0x1030 else {
+        guard fat.wasUniversal, fat.selectedSliceOffset == 0x100, fat.entryPoint == 0x1270 else {
             throw RE4MachO32Error.syntheticSelfTestFailed("universal ARM32 slice selection")
         }
         return "Mach-O 32-bit ARM parser self-test PASS\nThin ARMv6 + universal FAT slice passed.\nSegments: __TEXT, __DATA, __LINKEDIT\nEntry PC: 0x00001030\nSymbols/imports: _malloc\nDylib, dyld bind, indirect symbol and relocation parsing passed.\nGuest mapping bounds check passed.\nNo game assets or original IPA used."
