@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var machOImportPlanReportMessage = ""
     @State private var machOHLEBindingReportMessage = ""
     @State private var machOEntryPreflightMessage = ""
+    @State private var machOPointerFixupAuditMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
     @State private var loadedMachOImage: RE4MachO32Image?
@@ -299,6 +300,31 @@ struct ContentView: View {
                 Text(machOEntryPreflightMessage)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(machOEntryPreflightMessage.contains("control-flow preflight PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    do {
+                        machOPointerFixupAuditMessage = try RE4MachO32PointerFixupAudit.auditKnownRes4Entry(
+                            image: image, memory: memory
+                        )
+                    } catch {
+                        machOPointerFixupAuditMessage = "Pointer/fixup audit failed：\\(error.localizedDescription)"
+                    }
+                } else {
+                    machOPointerFixupAuditMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("檢查 Entry 間接指標／Fixup（唯讀）", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOPointerFixupAuditMessage.isEmpty {
+                Text(machOPointerFixupAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machOPointerFixupAuditMessage.contains("audit PASS") ? .green : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }

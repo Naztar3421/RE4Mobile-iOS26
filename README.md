@@ -97,3 +97,12 @@ The on-device “檢查 Entry PC 指令（不執行）” reads from the already
 ## ARMv6 entry control-flow / literal-pool static analysis
 
 The on-device entry inspection button now decodes a restricted sequential path through common ARM data-processing and LDR/STR instructions, tracks only statically knowable register values, resolves PC-relative LDR literal references and statically inferable BLX/BX targets, then stops at an unconditional BX without following it. Referenced literal words are labelled as data, not instructions. The report explicitly states that guest execution and HLE dispatch did not occur and that Mach-O fixups remain unapplied; inferred targets are not proof of runnable code.
+
+
+## Read-only pointer/fixup audit
+
+The parser now reports the external/local relocation tables declared by `LC_DYSYMTAB` (`extreloff/nextrel` and `locreloff/nlocrel`) separately from section relocation records and dyld bind streams. These tables are decoded and reported, not applied.
+
+The on-device “檢查 Entry 間接指標／Fixup（唯讀）” audits the two pointer slots inferred from the current Res4 ARMv6 entry-path report (`0x001C13DC` and `0x001C13E0`). It shows the containing segment/section, backing file offset and raw word, current mapped word, classic indirect-symbol entry, section/dynamic relocation matches, and dyld bind records. These preset addresses apply to the tested Res4 build only.
+
+A zero pointer is not assumed to be null or to require relocation. The audit only reports whether the parser found a matching import/fixup-related record for that exact slot. No pointer is modified and no guest code executes.
