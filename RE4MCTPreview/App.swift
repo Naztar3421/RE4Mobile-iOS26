@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var sourceName = "內建合成樣本"
     @State private var activeSheet: PreviewSheet?
     @State private var blackAsTransparentPreview = false
+    @State private var uploadBridgeSmokeTest = false
     @State private var status = "等待貼圖解碼結果……"
     @State private var details = "啟動時先顯示內建合成測試，尚未匯入原版遊戲貼圖。"
     @State private var exportMessage = ""
@@ -34,10 +35,14 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            MCTMetalPreview(data: mctData, blackAsTransparent: blackAsTransparentPreview) { info, error in
+            MCTMetalPreview(
+                data: mctData,
+                blackAsTransparent: blackAsTransparentPreview,
+                uploadBridgeSmokeTest: uploadBridgeSmokeTest
+            ) { info, error in
                 if let info {
                     status = "成功：\(sourceName) 已解碼並交給 Metal 顯示。"
-                    details = "來源：\(sourceName)\n尺寸：\(info.width) × \(info.height)\n格式：\(info.format)／壓縮：\(info.compression)\nMCT：\(info.sourceBytes) bytes；RGBA8：\(info.rgbaBytes) bytes\nRGBA透明像素：\(info.transparentPixels)\n純黑不透明像素：\(info.blackPixels)\nSHA-256：\(info.sha256)"
+                    details = "來源：\(sourceName)\n尺寸：\(info.width) × \(info.height)\n格式：\(info.format)／壓縮：\(info.compression)\nMCT：\(info.sourceBytes) bytes；RGBA8：\(info.rgbaBytes) bytes\nRGBA透明像素：\(info.transparentPixels)\n純黑不透明像素：\(info.blackPixels)\nSHA-256：\(info.sha256)\n\(info.uploadPathNote)"
                 } else {
                     status = "載入失敗"
                     details = error ?? "未知錯誤"
@@ -67,6 +72,21 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
 
             Text("診斷模式：開啟後會把純黑像素以棋盤底色顯示，便於判斷黑區是否可能是色鍵背景；這不是對遊戲透明規則的定論。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Button {
+                uploadBridgeSmokeTest.toggle()
+            } label: {
+                Label(
+                    uploadBridgeSmokeTest ? "上傳路徑：Bridge Smoke Test" : "上傳路徑：直接 Metal",
+                    systemImage: uploadBridgeSmokeTest ? "point.3.connected.trianglepath.dotted" : "arrow.right"
+                )
+            }
+            .buttonStyle(.bordered)
+
+            Text("Bridge 測試使用合成 guest 位址與由 MCT 標頭模擬的 metadata；只驗證 host registry／upload bridge，不代表原始 guest runtime 已接通。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -244,11 +264,13 @@ private struct MCTPreviewInfo {
     let transparentPixels: Int
     let blackPixels: Int
     let sha256: String
+    let uploadPathNote: String
 }
 
 private struct MCTMetalPreview: UIViewRepresentable {
     let data: Data
     let blackAsTransparent: Bool
+    let uploadBridgeSmokeTest: Bool
     let onResult: (MCTPreviewInfo?, String?) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onResult: onResult) }
@@ -260,13 +282,23 @@ private struct MCTMetalPreview: UIViewRepresentable {
         view.enableSetNeedsDisplay = false
         view.isPaused = false
         context.coordinator.onResult = onResult
-        context.coordinator.load(data, blackAsTransparent: blackAsTransparent, into: view)
+        context.coordinator.load(
+            data,
+            blackAsTransparent: blackAsTransparent,
+            uploadBridgeSmokeTest: uploadBridgeSmokeTest,
+            into: view
+        )
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
         context.coordinator.onResult = onResult
-        context.coordinator.load(data, blackAsTransparent: blackAsTransparent, into: uiView)
+        context.coordinator.load(
+            data,
+            blackAsTransparent: blackAsTransparent,
+            uploadBridgeSmokeTest: uploadBridgeSmokeTest,
+            into: uiView
+        )
     }
 
     @MainActor
@@ -274,23 +306,33 @@ private struct MCTMetalPreview: UIViewRepresentable {
         var onResult: (MCTPreviewInfo?, String?) -> Void
         private var renderer: RE4MetalTexturePreviewRenderer?
         private var loadedHash: String?
+        private var loadedUploadBridgeSmokeTest: Bool?
         private var loadedInfo: MCTPreviewInfo?
+        private var textureRegistry: RE4GuestTextureMetalRegistry?
+        private var uploadBridge: RE4GuestTextureUploadBridge?
+        private var nextMockGuestAddress: UInt32 = 0xF000_1000
 
         init(onResult: @escaping (MCTPreviewInfo?, String?) -> Void) {
             self.onResult = onResult
         }
 
-        func load(_ data: Data, blackAsTransparent: Bool, into view: MTKView) {
+        func load(
+            _ data: Data,
+            blackAsTransparent: Bool,
+            uploadBridgeSmokeTest: Bool,
+            into view: MTKView
+        ) {
             let sourceHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             renderer?.setBlackAsTransparentPreview(blackAsTransparent)
-            if loadedHash == sourceHash, let loadedInfo {
-                // An imported file can be byte-identical to the built-in fixture.
-                // Still report success after its display name/source changes.
+            if loadedHash == sourceHash,
+               loadedUploadBridgeSmokeTest == uploadBridgeSmokeTest,
+               let loadedInfo {
                 DispatchQueue.main.async { [weak self] in
                     self?.onResult(loadedInfo, nil)
                 }
                 return
             }
+
             do {
                 let decoded = try RE4MCTTextureDecoder.decode(data)
                 guard let device = view.device ?? MTLCreateSystemDefaultDevice() else {
@@ -298,29 +340,95 @@ private struct MCTMetalPreview: UIViewRepresentable {
                                   userInfo: [NSLocalizedDescriptionKey: "此裝置沒有可用的 Metal device。"])
                 }
                 view.device = device
-                let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-                    pixelFormat: .rgba8Unorm,
-                    width: decoded.width,
-                    height: decoded.height,
-                    mipmapped: false
-                )
-                descriptor.usage = [.shaderRead]
-                descriptor.storageMode = .shared
-                guard let texture = device.makeTexture(descriptor: descriptor) else {
-                    throw NSError(domain: "RE4MCTPreview", code: 2,
-                                  userInfo: [NSLocalizedDescriptionKey: "無法建立 MTLTexture。"])
-                }
-                texture.label = "MCTPreview/\(decoded.width)x\(decoded.height)"
-                decoded.rgba8.withUnsafeBytes { raw in
-                    if let base = raw.baseAddress {
-                        texture.replace(
+
+                let texture: MTLTexture
+                let pathNote: String
+                if uploadBridgeSmokeTest {
+                    let registry: RE4GuestTextureMetalRegistry
+                    if let existingRegistry = textureRegistry {
+                        registry = existingRegistry
+                    } else {
+                        let newRegistry = RE4GuestTextureMetalRegistry(device: device)
+                        textureRegistry = newRegistry
+                        registry = newRegistry
+                    }
+
+                    let bridge: RE4GuestTextureUploadBridge
+                    if let existingBridge = uploadBridge {
+                        bridge = existingBridge
+                    } else {
+                        let newBridge = RE4GuestTextureUploadBridge(registry: registry)
+                        uploadBridge = newBridge
+                        bridge = newBridge
+                    }
+
+                    // Synthetic tokens only: the public preview app has no original guest
+                    // ARMv6 runtime or live native MCE table connected.
+                    let guestObjectAddress = nextMockGuestAddress
+                    let guestMceTextureAddress = nextMockGuestAddress &+ 1
+                    nextMockGuestAddress &+= 2
+                    let snapshot = RE4NativeGuestTextureSnapshot(
+                        guestObjectAddress: guestObjectAddress,
+                        guestMceTextureAddress: guestMceTextureAddress,
+                        name: "BridgeSmokeTest",
+                        sourceMCTBytes: data,
+                        nativeWidth: decoded.width,
+                        nativeHeight: decoded.height,
+                        nativePixelFormat: UInt32(decoded.sourcePixelFormat)
+                    )
+                    let uploaded = try bridge.registerCompletedNativeLoad(snapshot)
+
+                    guard let byObject = registry.texture(forGuestObject: guestObjectAddress),
+                          byObject === uploaded,
+                          let byMCE = bridge.texture(forNativeMCETexture: guestMceTextureAddress),
+                          byMCE === uploaded else {
+                        throw NSError(domain: "RE4MCTPreview", code: 10,
+                                      userInfo: [NSLocalizedDescriptionKey: "Bridge smoke test failed: registry lookup did not return the uploaded texture."])
+                    }
+
+                    // The renderer retains this local MTLTexture after the registry binding
+                    // is cleared, so this also verifies cleanup without blanking the preview.
+                    bridge.guestObjectDestroyed(guestObjectAddress)
+                    guard registry.texture(forGuestObject: guestObjectAddress) == nil,
+                          bridge.texture(forNativeMCETexture: guestMceTextureAddress) == nil else {
+                        throw NSError(domain: "RE4MCTPreview", code: 11,
+                                      userInfo: [NSLocalizedDescriptionKey: "Bridge smoke test failed: guest-object cleanup left a registry binding."])
+                    }
+
+                    texture = uploaded
+                    pathNote = "Upload Bridge／Registry PASS；使用合成 guest token，metadata 由 MCT 標頭模擬（非原始 guest runtime）。"
+                } else {
+                    let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                        pixelFormat: .rgba8Unorm,
+                        width: decoded.width,
+                        height: decoded.height,
+                        mipmapped: false
+                    )
+                    descriptor.usage = [.shaderRead]
+                    descriptor.storageMode = .shared
+                    guard let directTexture = device.makeTexture(descriptor: descriptor) else {
+                        throw NSError(domain: "RE4MCTPreview", code: 2,
+                                      userInfo: [NSLocalizedDescriptionKey: "無法建立 MTLTexture。"])
+                    }
+                    directTexture.label = "MCTPreview/\(decoded.width)x\(decoded.height)"
+                    let copied = decoded.rgba8.withUnsafeBytes { raw -> Bool in
+                        guard let base = raw.baseAddress else { return false }
+                        directTexture.replace(
                             region: MTLRegionMake2D(0, 0, decoded.width, decoded.height),
                             mipmapLevel: 0,
                             withBytes: base,
                             bytesPerRow: decoded.bytesPerRow
                         )
+                        return true
                     }
+                    guard copied else {
+                        throw NSError(domain: "RE4MCTPreview", code: 3,
+                                      userInfo: [NSLocalizedDescriptionKey: "RGBA8 buffer has no base address."])
+                    }
+                    texture = directTexture
+                    pathNote = "直接 decoder → MTLTexture"
                 }
+
                 if let renderer {
                     renderer.setTexture(texture)
                     renderer.setBlackAsTransparentPreview(blackAsTransparent)
@@ -329,7 +437,9 @@ private struct MCTMetalPreview: UIViewRepresentable {
                     newRenderer.setBlackAsTransparentPreview(blackAsTransparent)
                     renderer = newRenderer
                 }
+
                 loadedHash = sourceHash
+                loadedUploadBridgeSmokeTest = uploadBridgeSmokeTest
                 let rgba = [UInt8](decoded.rgba8)
                 var transparentPixels = 0
                 var blackPixels = 0
@@ -349,11 +459,10 @@ private struct MCTMetalPreview: UIViewRepresentable {
                     rgbaBytes: decoded.rgba8.count,
                     transparentPixels: transparentPixels,
                     blackPixels: blackPixels,
-                    sha256: sourceHash
+                    sha256: sourceHash,
+                    uploadPathNote: pathNote
                 )
                 loadedInfo = info
-                // Deferring this callback avoids mutating SwiftUI @State while
-                // UIViewRepresentable is in makeUIView/updateUIView.
                 DispatchQueue.main.async { [weak self] in
                     self?.onResult(info, nil)
                 }
@@ -363,6 +472,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
                     self?.onResult(nil, message)
                 }
             }
+        }
         }
     }
 }

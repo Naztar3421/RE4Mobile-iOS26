@@ -28,3 +28,12 @@ The repository intentionally excludes the game IPA and extracted game resources.
 ## Local build
 
 Install XcodeGen, run `xcodegen generate`, and build the `RE4MCTPreview` scheme in Xcode. The deployment target is iOS 16.0. No JIT or game-engine compatibility is claimed by this project.
+
+
+## Host-side Upload Bridge smoke test
+
+The app has an optional **上傳路徑：Bridge Smoke Test** switch. It sends the currently imported MCT through RE4GuestTextureUploadBridge and RE4GuestTextureMetalRegistry, asks Metal to create/upload an MTLTexture, verifies lookup by both mock guest-object and mock MCE keys, then verifies that guestObjectDestroyed clears both registry bindings. The renderer retains the returned texture to display it.
+
+This mode deliberately uses synthetic guest address tokens and derives mock width/height/format fields from the MCT header. It validates the Apple-SDK host bridge, registry lookup/lifecycle, and actual Metal texture upload on-device; it does **not** prove that the original ARMv6 guest runtime is connected or that those values came from a live guest MCE table. The ordinary direct-preview route remains available.
+
+The public repository contains only source code and asset-free fixtures; do not commit the original IPA or extracted game assets.
