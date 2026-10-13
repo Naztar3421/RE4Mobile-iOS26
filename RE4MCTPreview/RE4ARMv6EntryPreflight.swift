@@ -266,6 +266,26 @@ public enum RE4ARMv6EntryPreflight {
         }
     }
 
+
+    private static func entryShiftedRegisterOffset(_ word: UInt32, registers: [Int: UInt32]) -> UInt32? {
+        guard word & (1 << 25) != 0, word & (1 << 4) == 0 else { return nil }
+        let rm = Int(word & 0xF)
+        guard let value = registers[rm] else { return nil }
+        let shiftType = (word >> 5) & 3
+        let amount = (word >> 7) & 0x1F
+        switch shiftType {
+        case 0: return amount == 0 ? value : value << amount
+        case 1: return amount == 0 ? 0 : value >> amount
+        case 2:
+            if amount == 0 { return (value & 0x80000000) == 0 ? 0 : UInt32.max }
+            return UInt32(bitPattern: Int32(bitPattern: value) >> amount)
+        default:
+            // RRX requires the carry flag, which static analysis deliberately does not guess.
+            if amount == 0 { return nil }
+            return (value >> amount) | (value << (32 - amount))
+        }
+    }
+
     /// Statically traces a simple sequential entry path, annotating PC-relative literals and
     /// indirect transfer targets without changing CPU state or executing any guest instruction.
     public static func inspectEntryControlFlow(entryPoint: UInt32,
@@ -284,6 +304,7 @@ public enum RE4ARMv6EntryPreflight {
         var lines = [String]()
         var registers: [Int: UInt32] = [:]
         var literalRefs: [UInt32: UInt32] = [:]
+        var indexedLoads: [UInt32: UInt32] = [:]
         var transfers = [String]()
         var instructionCount = 0
         var stopBX: UInt32?
@@ -325,21 +346,41 @@ public enum RE4ARMv6EntryPreflight {
                     }
                 }
             } else if ((word >> 26) & 3) == 1,
-                      word & (1 << 20) != 0,
-                      word & (1 << 24) != 0,
-                      word & (1 << 25) == 0 {
+                      word & (1 << 20) != 0,   // LDR
+                      word & (1 << 22) == 0,   // word, not LDRB
+                      word & (1 << 24) != 0,   // pre-indexed address
+                      word & (1 << 21) == 0 {  // no write-back in this static subset
                 let rn = Int((word >> 16) & 0xF)
                 let rd = Int((word >> 12) & 0xF)
-                if let base = registers[rn] {
-                    let offset = word & 0xFFF
+                let base: UInt32? = rn == 15 ? pc &+ 8 : registers[rn]
+                let offset: UInt32?
+                if word & (1 << 25) == 0 {
+                    offset = word & 0xFFF
+                } else {
+                    offset = entryShiftedRegisterOffset(word, registers: registers)
+                }
+
+                if let base, let offset {
                     let address64 = word & (1 << 23) != 0
                         ? UInt64(base) + UInt64(offset)
                         : (UInt64(base) >= UInt64(offset) ? UInt64(base) - UInt64(offset) : UInt64.max)
                     if address64 <= UInt64(UInt32.max) {
-                        let value = try entryReadWord(UInt32(address64), memory: memory)
+                        let address = UInt32(address64)
+                        let value = try entryReadWord(address, memory: memory)
                         registers[rd] = value
-                        annotations.append(String(format: "static dereference [0x%08X] = 0x%08X", UInt32(address64), value))
+                        if rn == 15 && word & (1 << 25) != 0 {
+                            indexedLoads[address] = value
+                            annotations.append(String(format: "PC-indexed LDR effective address = 0x%08X; loaded 0x%08X", address, value))
+                        } else {
+                            annotations.append(String(format: "static dereference [0x%08X] = 0x%08X", address, value))
+                        }
+                    } else {
+                        registers.removeValue(forKey: rd)
+                        annotations.append("static LDR address overflow; destination register marked unknown")
                     }
+                } else {
+                    registers.removeValue(forKey: rd)
+                    annotations.append("static LDR base/offset unknown; destination register marked unknown")
                 }
             }
 
@@ -372,7 +413,18 @@ public enum RE4ARMv6EntryPreflight {
                 var displacement = Int32(word & 0x00FFFFFF)
                 if (displacement & 0x00800000) != 0 { displacement |= Int32(bitPattern: 0xFF000000) }
                 let target = UInt32(truncatingIfNeeded: Int64(pc) + 8 + (Int64(displacement) << 2))
+                let isLink = word & (1 << 24) != 0
                 annotations.append(String(format: "branch edge = 0x%08X (not followed)", target))
+                let labels = image.symbols.filter {
+                    !$0.isUndefined && !$0.name.isEmpty && $0.value == target
+                }.map(\.name).sorted()
+                if !labels.isEmpty {
+                    annotations.append("defined target symbol(s): " + labels.joined(separator: ", "))
+                }
+                if isLink && ((word >> 28) & 0xF) == 0xE {
+                    // The callee may clobber the ARM caller-saved registers; don't carry stale values forward.
+                    for index in [0, 1, 2, 3, 12] { registers.removeValue(forKey: index) }
+                }
             }
             lines.append(String(format: "0x%08X  0x%08X  %@", pc, word, decoded))
             for annotation in annotations { lines.append("    " + annotation) }
@@ -390,12 +442,30 @@ public enum RE4ARMv6EntryPreflight {
             "[Entry path: decoded operands]"
         ]
         report += lines
-        report += ["", "[Referenced literal-pool words]"]
+        report += ["", "[Referenced PC-relative literal-pool words]"]
         if literalRefs.isEmpty {
             report.append("(none referenced by the inspected path)")
         } else {
             for address in literalRefs.keys.sorted() {
                 report.append(String(format: "0x%08X: 0x%08X (data, not an instruction)", address, literalRefs[address]!))
+            }
+        }
+        report += ["", "[PC-indexed/register-offset load targets]"]
+        if indexedLoads.isEmpty {
+            report.append("(none resolved)")
+        } else {
+            for address in indexedLoads.keys.sorted() {
+                report.append(String(format: "0x%08X: loaded 0x%08X", address, indexedLoads[address]!))
+                if let segment = image.segments.first(where: {
+                    !$0.isPageZero && UInt64(address) >= UInt64($0.vmAddress) &&
+                    UInt64(address) + 4 <= UInt64($0.vmAddress) + UInt64($0.vmSize)
+                }) {
+                    let section = segment.sections.first(where: {
+                        UInt64(address) >= UInt64($0.address) &&
+                        UInt64(address) + 4 <= UInt64($0.address) + UInt64($0.size)
+                    })
+                    report.append("    segment: \(segment.name)" + (section.map { ", section: \($0.segmentName),\($0.name)" } ?? ", no named section"))
+                }
             }
         }
         report += ["", "[Statically inferred indirect transfers]"]
@@ -492,7 +562,19 @@ public enum RE4ARMv6EntryPreflight {
         let second = classify(0xE2800002, at: 0x1274)
         let third = classify(0xE12FFF1E, at: 0x1278)
         let flow = try inspectEntryControlFlow(entryPoint: image.entryPoint!, image: image, memory: memory, maxInstructions: 8)
-        guard flow.contains("ADD r0, r0, #0x2"),
+        // Synthetic register-offset load: MOV r0,#0x18; LDR r1,[pc,r0]; BX lr.
+        // It reads a marker word from 0x12A4 in zero-filled synthetic guest memory.
+        let markerInstructions = Data([
+            0x18, 0x00, 0xA0, 0xE3, // 0x1280 MOV r0,#0x18
+            0x00, 0x10, 0x9F, 0xE7, // 0x1284 LDR r1,[pc,r0] (PC=0x128C, +0x18=0x12A4)
+            0x1E, 0xFF, 0x2F, 0xE1  // 0x1288 BX lr
+        ])
+        try memory.writeBytes(at: 0x1280, data: markerInstructions)
+        try memory.writeBytes(at: 0x12A4, data: Data([0x78, 0x56, 0x34, 0x12]))
+        let indexedFlow = try inspectEntryControlFlow(entryPoint: 0x1280, image: image, memory: memory, maxInstructions: 8)
+        guard indexedFlow.contains("PC-indexed LDR effective address = 0x000012A4; loaded 0x12345678"),
+              indexedFlow.contains("0x000012A4: loaded 0x12345678"),
+              flow.contains("ADD r0, r0, #0x2"),
               flow.contains("BX lr"),
               flow.contains("Guest execution performed: NO"),
               first.instructionClass == .dataProcessing,
