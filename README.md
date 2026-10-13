@@ -37,3 +37,14 @@ The app has an optional **上傳路徑：Bridge Smoke Test** switch. It sends th
 This mode deliberately uses synthetic guest address tokens and derives mock width/height/format fields from the MCT header. It validates the Apple-SDK host bridge, registry lookup/lifecycle, and actual Metal texture upload on-device; it does **not** prove that the original ARMv6 guest runtime is connected or that those values came from a live guest MCE table. The ordinary direct-preview route remains available.
 
 The public repository contains only source code and asset-free fixtures; do not commit the original IPA or extracted game assets.
+
+
+## Captured MVP-18 Load_Obj adapter replay
+
+The optional MVP-18 Load_Obj 回放 mode exercises the guest-memory adapter using the exact captured 2d_fnt_00.mct input (17,450 bytes, SHA-256 4d59a527c44bc8b3a701eeae778564d169cf4e88d7ffa97b0161c8c6c124d00d) and observed guest memory layout:
+- guest object: 0x03103100; source MCT input: 0x031095B8
+- texture table: 0x03111E70, count at +0x28, array pointer at +0x2C
+- texture array: 0x03111EA0; first MCE texture: 0x0310DA00
+- MCE width/height at +44/+46, pixel format at +0x30
+
+The app reconstructs only these captured fields in sparse test memory, calls the same post-return adapter contract expected from a future live interpreter, checks metadata against the decoded MCT, uploads a real MTLTexture, verifies registry lookups, and checks cleanup. No original MCT or IPA is bundled. This is captured-memory replay, not a live ARMv6 interpreter on iOS; a future runtime should call the adapter after Load_Obj returns at 0x1C318 and preserve arguments captured at 0x1C314.

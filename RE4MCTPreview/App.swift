@@ -20,6 +20,7 @@ struct ContentView: View {
     @State private var activeSheet: PreviewSheet?
     @State private var blackAsTransparentPreview = false
     @State private var uploadBridgeSmokeTest = false
+    @State private var capturedLoadObjReplay = false
     @State private var status = "等待貼圖解碼結果……"
     @State private var details = "啟動時先顯示內建合成測試，尚未匯入原版遊戲貼圖。"
     @State private var exportMessage = ""
@@ -38,7 +39,8 @@ struct ContentView: View {
             MCTMetalPreview(
                 data: mctData,
                 blackAsTransparent: blackAsTransparentPreview,
-                uploadBridgeSmokeTest: uploadBridgeSmokeTest
+                uploadBridgeSmokeTest: uploadBridgeSmokeTest,
+                capturedLoadObjReplay: capturedLoadObjReplay
             ) { info, error in
                 if let info {
                     status = "成功：\(sourceName) 已解碼並交給 Metal 顯示。"
@@ -78,6 +80,7 @@ struct ContentView: View {
 
             Button {
                 uploadBridgeSmokeTest.toggle()
+                if uploadBridgeSmokeTest { capturedLoadObjReplay = false }
             } label: {
                 Label(
                     uploadBridgeSmokeTest ? "上傳路徑：Bridge Smoke Test" : "上傳路徑：直接 Metal",
@@ -87,6 +90,22 @@ struct ContentView: View {
             .buttonStyle(.bordered)
 
             Text("Bridge 測試使用合成 guest 位址與由 MCT 標頭模擬的 metadata；只驗證 host registry／upload bridge，不代表原始 guest runtime 已接通。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Button {
+                capturedLoadObjReplay.toggle()
+                if capturedLoadObjReplay { uploadBridgeSmokeTest = false }
+            } label: {
+                Label(
+                    capturedLoadObjReplay ? "MVP-18 Load_Obj 回放：開" : "測試 MVP-18 Load_Obj 回放",
+                    systemImage: capturedLoadObjReplay ? "memorychip.fill" : "memorychip"
+                )
+            }
+            .buttonStyle(.bordered)
+
+            Text("回放模式只接受已記錄的 2d_fnt_00.mct（17,450 bytes、固定 SHA-256），會依 MVP-18 實測位址重建 guest memory 欄位；這不是即時 ARMv6 執行。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -110,6 +129,8 @@ struct ContentView: View {
                 Button("重新載入合成樣本") {
                     sourceName = "內建合成樣本"
                     mctData = SyntheticMCTFixture.makeCheckerboard()
+                    uploadBridgeSmokeTest = false
+                    capturedLoadObjReplay = false
                     exportMessage = ""
                 }
                 .buttonStyle(.bordered)
@@ -143,6 +164,8 @@ struct ContentView: View {
                             sourceName = url.lastPathComponent
                             status = "已匯入 \(url.lastPathComponent)，正在解碼……"
                             details = "檔案已複製到 App 暫存空間，正在解析 MCT 標頭與貼圖資料。"
+                            uploadBridgeSmokeTest = false
+                            capturedLoadObjReplay = false
                             exportMessage = ""
                             mctData = imported
                         } catch {
@@ -271,6 +294,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
     let data: Data
     let blackAsTransparent: Bool
     let uploadBridgeSmokeTest: Bool
+    let capturedLoadObjReplay: Bool
     let onResult: (MCTPreviewInfo?, String?) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onResult: onResult) }
@@ -286,6 +310,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
             data,
             blackAsTransparent: blackAsTransparent,
             uploadBridgeSmokeTest: uploadBridgeSmokeTest,
+            capturedLoadObjReplay: capturedLoadObjReplay,
             into: view
         )
         return view
@@ -297,6 +322,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
             data,
             blackAsTransparent: blackAsTransparent,
             uploadBridgeSmokeTest: uploadBridgeSmokeTest,
+            capturedLoadObjReplay: capturedLoadObjReplay,
             into: uiView
         )
     }
@@ -307,6 +333,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
         private var renderer: RE4MetalTexturePreviewRenderer?
         private var loadedHash: String?
         private var loadedUploadBridgeSmokeTest: Bool?
+        private var loadedCapturedLoadObjReplay: Bool?
         private var loadedInfo: MCTPreviewInfo?
         private var textureRegistry: RE4GuestTextureMetalRegistry?
         private var uploadBridge: RE4GuestTextureUploadBridge?
@@ -320,12 +347,14 @@ private struct MCTMetalPreview: UIViewRepresentable {
             _ data: Data,
             blackAsTransparent: Bool,
             uploadBridgeSmokeTest: Bool,
+            capturedLoadObjReplay: Bool,
             into view: MTKView
         ) {
             let sourceHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             renderer?.setBlackAsTransparentPreview(blackAsTransparent)
             if loadedHash == sourceHash,
                loadedUploadBridgeSmokeTest == uploadBridgeSmokeTest,
+               loadedCapturedLoadObjReplay == capturedLoadObjReplay,
                let loadedInfo {
                 DispatchQueue.main.async { [weak self] in
                     self?.onResult(loadedInfo, nil)
@@ -343,7 +372,42 @@ private struct MCTMetalPreview: UIViewRepresentable {
 
                 let texture: MTLTexture
                 let pathNote: String
-                if uploadBridgeSmokeTest {
+                if capturedLoadObjReplay {
+                    let registry: RE4GuestTextureMetalRegistry
+                    if let existingRegistry = textureRegistry {
+                        registry = existingRegistry
+                    } else {
+                        let newRegistry = RE4GuestTextureMetalRegistry(device: device)
+                        textureRegistry = newRegistry
+                        registry = newRegistry
+                    }
+                    let bridge: RE4GuestTextureUploadBridge
+                    if let existingBridge = uploadBridge {
+                        bridge = existingBridge
+                    } else {
+                        let newBridge = RE4GuestTextureUploadBridge(registry: registry)
+                        uploadBridge = newBridge
+                        bridge = newBridge
+                    }
+                    let replay = try RE4CapturedMVP18LoadObjReplay.make(sourceMCT: data)
+                    let adapter = RE4GuestTextureLoadAdapter(bridge: bridge)
+                    let uploaded = try adapter.didReturnFromNativeLoadObj(replay.context, guestMemory: replay.memory)
+                    guard let byObject = registry.texture(forGuestObject: replay.context.guestObjectAddress),
+                          byObject === uploaded,
+                          let byMCE = bridge.texture(forNativeMCETexture: RE4CapturedMVP18LoadObjReplay.mceTexture),
+                          byMCE === uploaded else {
+                        throw NSError(domain: "RE4MCTPreview", code: 12,
+                                      userInfo: [NSLocalizedDescriptionKey: "Captured Load_Obj replay failed: registry lookup mismatch."])
+                    }
+                    adapter.guestObjectDestroyed(replay.context.guestObjectAddress)
+                    guard registry.texture(forGuestObject: replay.context.guestObjectAddress) == nil,
+                          bridge.texture(forNativeMCETexture: RE4CapturedMVP18LoadObjReplay.mceTexture) == nil else {
+                        throw NSError(domain: "RE4MCTPreview", code: 13,
+                                      userInfo: [NSLocalizedDescriptionKey: "Captured Load_Obj replay failed: cleanup left a registry binding."])
+                    }
+                    texture = uploaded
+                    pathNote = "MVP-18 Load_Obj adapter replay PASS；依記錄的 guest memory／MCE metadata 上傳，非即時 ARMv6 runtime。"
+                } else if uploadBridgeSmokeTest {
                     let registry: RE4GuestTextureMetalRegistry
                     if let existingRegistry = textureRegistry {
                         registry = existingRegistry
@@ -440,6 +504,7 @@ private struct MCTMetalPreview: UIViewRepresentable {
 
                 loadedHash = sourceHash
                 loadedUploadBridgeSmokeTest = uploadBridgeSmokeTest
+                loadedCapturedLoadObjReplay = capturedLoadObjReplay
                 let rgba = [UInt8](decoded.rgba8)
                 var transparentPixels = 0
                 var blackPixels = 0
