@@ -135,3 +135,14 @@ The static disassembler also recognizes ARM block-transfer instructions such as 
 The sequential ARMv6 inspection stops when an `LDM*` instruction loads `PC` from its register list, e.g. `LDMIA sp!, {r4, r5, r6, r7, pc}`. The stack and restored return address are not modeled, so bytes after that return sequence (which may be a literal pool) are not reported as reachable sequential instructions. A synthetic test verifies that a marker word immediately after the LDM return is not scanned.
 
 The UI also has a static audit preset for the two direct call targets seen in the inspected `_main` path: `0x001A0558` and `0x0019FC70`. Each report includes symbols near the target and a bounded instruction scan. Neither call target is invoked and no guest instructions execute.
+
+
+## Imported-pointer stub control flow
+
+Both observed direct-call targets (`0x001A0558` and `0x0019FC70`) begin with the pattern `LDR r12, [pc]` followed by `LDR pc, [r12]`; their literal words point to pointer slots `0x001C19F4` and `0x001C16FC`, which the read-only report showed currently dereference to `0x00008DD0`. The static analyzer now stops at an unconditional word `LDR` that loads `PC`, reports the resolved indirect destination when known, and does not decode the following literal-pool word as reachable code. A synthetic test checks this boundary.
+
+Two additional read-only controls are available:
+- inspect the shared destination `0x00008DD0` without calling it;
+- audit the two pointer slots against raw file words, mapped words, section/indirect-symbol metadata, relocation tables and dyld binds.
+
+No code, pointer slot, or HLE binding is changed by these diagnostics.

@@ -35,6 +35,8 @@ struct ContentView: View {
     @State private var machOEntryPreflightMessage = ""
     @State private var machOCallTargetAuditMessage = ""
     @State private var machODirectCallAuditMessage = ""
+    @State private var machOStubTargetAuditMessage = ""
+    @State private var machOStubSlotAuditMessage = ""
     @State private var machOPointerFixupAuditMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
@@ -366,6 +368,59 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
 
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    do {
+                        machOStubTargetAuditMessage = try RE4ARMv6EntryPreflight.inspectAddress(
+                            0x00008DD0, label: "Target reached by both imported-pointer stubs",
+                            image: image, memory: memory, maxInstructions: 64
+                        )
+                    } catch {
+                        machOStubTargetAuditMessage = "Stub target audit failed：\(error.localizedDescription)"
+                    }
+                } else {
+                    machOStubTargetAuditMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("靜態檢查 stub 共用跳轉目標 0x8DD0（不執行）", systemImage: "arrow.turn.down.right")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOStubTargetAuditMessage.isEmpty {
+                Text(machOStubTargetAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machOStubTargetAuditMessage.contains("indirect target static audit PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    do {
+                        machOStubSlotAuditMessage = try RE4MachO32PointerFixupAudit.report(
+                            image: image, memory: memory,
+                            pointerSlotAddresses: [0x001C19F4, 0x001C16FC]
+                        )
+                    } catch {
+                        machOStubSlotAuditMessage = "Stub slot audit failed：\(error.localizedDescription)"
+                    }
+                } else {
+                    machOStubSlotAuditMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("檢查 stub 指標槽 0x1C19F4／0x1C16FC（唯讀）", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOStubSlotAuditMessage.isEmpty {
+                Text(machOStubSlotAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machOStubSlotAuditMessage.contains("audit PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
             Button {
                 if let image = loadedMachOImage, let memory = mappedMachOMemory {
                     do {
@@ -468,6 +523,8 @@ struct ContentView: View {
                             machOEntryPreflightMessage = ""
                             machOCallTargetAuditMessage = ""
                             machODirectCallAuditMessage = ""
+                            machOStubTargetAuditMessage = ""
+                            machOStubSlotAuditMessage = ""
                             machOPointerFixupAuditMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)

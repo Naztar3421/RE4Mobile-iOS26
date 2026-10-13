@@ -321,6 +321,8 @@ public enum RE4ARMv6EntryPreflight {
         var transfers = [String]()
         var instructionCount = 0
         var stopBX: UInt32?
+        var stopLDRPC: UInt32?
+        var stopLDRPCTarget: UInt32?
         var stopLoadMultiplePC: UInt32?
         var pc = entryPoint
 
@@ -334,6 +336,15 @@ public enum RE4ARMv6EntryPreflight {
             let word = try entryReadWord(pc, memory: memory)
             let decoded = entryDescribe(word, at: pc)
             var annotations = [String]()
+            let isUnconditionalWordLoadToPC =
+                (word >> 28) == 0xE &&
+                ((word >> 26) & 3) == 1 &&
+                word & (1 << 20) != 0 &&
+                word & (1 << 22) == 0 &&
+                ((word >> 12) & 0xF) == 15
+            if isUnconditionalWordLoadToPC {
+                stopLDRPC = pc
+            }
 
             if let literal = entryLiteralAddress(word, pc: pc) {
                 let value = try entryReadWord(literal, memory: memory)
@@ -387,6 +398,17 @@ public enum RE4ARMv6EntryPreflight {
                             annotations.append(String(format: "PC-indexed LDR effective address = 0x%08X; loaded 0x%08X", address, value))
                         } else {
                             annotations.append(String(format: "static dereference [0x%08X] = 0x%08X", address, value))
+                        }
+                        if isUnconditionalWordLoadToPC {
+                            stopLDRPCTarget = value
+                            transfers.append(String(format: "LDR pc at 0x%08X -> 0x%08X", pc, value))
+                            annotations.append(String(format: "static indirect PC-load target = 0x%08X", value))
+                            let labels = image.symbols.filter {
+                                !$0.isUndefined && !$0.name.isEmpty && $0.value == value
+                            }.map(\.name).sorted()
+                            if !labels.isEmpty {
+                                annotations.append("defined target symbol(s): " + labels.joined(separator: ", "))
+                            }
                         }
                     } else {
                         registers.removeValue(forKey: rd)
@@ -446,6 +468,9 @@ public enum RE4ARMv6EntryPreflight {
 
             // LDM/LDMIA/LDMFD that loads PC transfers control away from the linear stream.
             // The static pass does not model SP/stack contents, so it cannot infer the restored PC.
+            if stopLDRPC == pc {
+                break
+            }
             if ((word >> 25) & 7) == 4,
                word & (1 << 20) != 0,
                word & (1 << 15) != 0 {
@@ -495,6 +520,12 @@ public enum RE4ARMv6EntryPreflight {
         report += transfers.isEmpty ? ["(none resolved)"] : transfers
         if let stopBX {
             report.append(String(format: "Linear fall-through stopped at unconditional BX 0x%08X; target not followed.", stopBX))
+        } else if let stopLDRPC {
+            if let target = stopLDRPCTarget {
+                report.append(String(format: "Linear scan stopped at LDR pc 0x%08X; resolved indirect target 0x%08X; target not followed.", stopLDRPC, target))
+            } else {
+                report.append(String(format: "Linear scan stopped at LDR pc 0x%08X; target unresolved and not followed.", stopLDRPC))
+            }
         } else if let stopLoadMultiplePC {
             report.append(String(format: "Linear scan stopped at LDM* 0x%08X because the register list restores PC; stack/return target not modeled. Subsequent bytes are not treated as reachable instructions.", stopLoadMultiplePC))
         } else {
@@ -607,7 +638,21 @@ public enum RE4ARMv6EntryPreflight {
         ])
         try memory.writeBytes(at: 0x12B0, data: ldmReturn)
         let ldmFlow = try inspectEntryControlFlow(entryPoint: 0x12B0, image: image, memory: memory, maxInstructions: 8)
-        guard ldmFlow.contains("Linear scan stopped at LDM* 0x000012B4"),
+
+        // LDR pc,[r12] must stop the sequential scan and report the statically loaded destination.
+        let ldrPCInstructions = Data([
+            0x18, 0xC0, 0x9F, 0xE5, // 0x12C0 LDR r12,[pc,#0x18] -> literal at 0x12E0
+            0x00, 0xF0, 0x9C, 0xE5, // 0x12C4 LDR pc,[r12] -> target from pointer slot 0x1300
+            0x00, 0x00, 0xA0, 0xE3  // 0x12C8 unreachable marker
+        ])
+        try memory.writeBytes(at: 0x12C0, data: ldrPCInstructions)
+        try memory.writeBytes(at: 0x12E0, data: Data([0x00, 0x13, 0x00, 0x00])) // literal -> slot 0x1300
+        try memory.writeBytes(at: 0x1300, data: Data([0x00, 0x14, 0x00, 0x00])) // slot -> target 0x1400
+        let ldrPCFlow = try inspectEntryControlFlow(entryPoint: 0x12C0, image: image, memory: memory, maxInstructions: 8)
+        guard ldrPCFlow.contains("LDR pc at 0x000012C4 -> 0x00001400"),
+              ldrPCFlow.contains("Linear scan stopped at LDR pc 0x000012C4; resolved indirect target 0x00001400"),
+              !ldrPCFlow.contains("0x000012C8  0xE3A00000"),
+              ldmFlow.contains("Linear scan stopped at LDM* 0x000012B4"),
               !ldmFlow.contains("0x000012B8  0xE3A00000"),
               indexedFlow.contains("PC-indexed LDR effective address = 0x000012A4; loaded 0x12345678"),
               indexedFlow.contains("0x000012A4: loaded 0x12345678"),
