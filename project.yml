@@ -1,0 +1,23 @@
+name: RE4MCTPreview
+options:
+  bundleIdPrefix: tw.naztar.re4preview
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  RE4MCTPreview:
+    type: application
+    platform: iOS
+    sources:
+      - path: RE4MCTPreview
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: tw.naztar.re4preview
+        PRODUCT_NAME: RE4MCTPreview
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        CODE_SIGN_STYLE: Manual
