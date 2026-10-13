@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 import Metal
 import MetalKit
 import CryptoKit
@@ -67,36 +66,35 @@ struct ContentView: View {
                 .multilineTextAlignment(.center)
         }
         .padding()
-        .fileImporter(
-            isPresented: $showingImporter,
-            // Use the custom document type declared in RE4MCTPreview-Info.plist.
-            allowedContentTypes: [.re4MCT],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                guard url.pathExtension.lowercased() == "mct" else {
-                    status = "檔案類型不符"
-                    details = "請選取副檔名為 .mct 的貼圖檔。"
-                    return
+        .sheet(isPresented: $showingImporter) {
+            MCTDocumentPicker { result in
+                showingImporter = false
+                switch result {
+                case .picked(let url):
+                    guard url.pathExtension.lowercased() == "mct" else {
+                        status = "選到的不是 .mct 檔案"
+                        details = "選到：\(url.lastPathComponent)\n請選取副檔名為 .mct 的貼圖檔。"
+                        return
+                    }
+                    do {
+                        let imported = try Data(contentsOf: url)
+                        sourceName = url.lastPathComponent
+                        status = "已匯入 \(url.lastPathComponent)，正在解碼……"
+                        details = "檔案已複製到 App 暫存空間，正在解析 MCT 標頭與貼圖資料。"
+                        mctData = imported
+                    } catch {
+                        status = "讀取 MCT 失敗"
+                        details = error.localizedDescription
+                    }
+                case .failed(let message):
+                    status = "匯入失敗"
+                    details = message
+                case .cancelled:
+                    status = "已取消選取"
+                    details = "尚未匯入新的 MCT；目前仍顯示：\(sourceName)"
                 }
-                let accessed = url.startAccessingSecurityScopedResource()
-                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-                do {
-                    let imported = try Data(contentsOf: url)
-                    sourceName = url.lastPathComponent
-                    mctData = imported
-                    status = "已選取檔案，正在重新解碼……"
-                    details = url.lastPathComponent
-                } catch {
-                    status = "讀取檔案失敗"
-                    details = error.localizedDescription
-                }
-            case .failure(let error):
-                status = "選取檔案失敗"
-                details = error.localizedDescription
             }
+            .ignoresSafeArea()
         }
     }
 }
@@ -213,10 +211,6 @@ private struct MCTMetalPreview: UIViewRepresentable {
             }
         }
     }
-}
-
-private extension UTType {
-    static let re4MCT = UTType(importedAs: "tw.naztar.re4preview.mct")
 }
 
 /// Creates an 8×8 MCT format-2 texture so the decoder and GPU path can be tested
