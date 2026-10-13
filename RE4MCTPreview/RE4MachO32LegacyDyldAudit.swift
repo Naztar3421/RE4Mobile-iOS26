@@ -54,6 +54,179 @@ public enum RE4MachO32LegacyDyldAudit {
                          bindRecords: image.bindRecords.filter { $0.vmAddress == item.slotAddress })
     }
 
+
+    private struct SymtabInfo {
+        let symoff: UInt32; let nsyms: UInt32; let stroff: UInt32; let strsize: UInt32
+    }
+    private struct DysymtabInfo {
+        let ilocalsym: UInt32; let nlocalsym: UInt32
+        let iextdefsym: UInt32; let nextdefsym: UInt32
+        let iundefsym: UInt32; let nundefsym: UInt32
+        let tocoff: UInt32; let ntoc: UInt32
+        let modtaboff: UInt32; let nmodtab: UInt32
+        let extrefsymoff: UInt32; let nextrefsyms: UInt32
+        let indirectsymoff: UInt32; let nindirectsyms: UInt32
+        let extreloff: UInt32; let nextrel: UInt32
+        let locreloff: UInt32; let nlocrel: UInt32
+    }
+    private struct DyldInfo {
+        let command: UInt32
+        let rebaseOff: UInt32; let rebaseSize: UInt32
+        let bindOff: UInt32; let bindSize: UInt32
+        let weakOff: UInt32; let weakSize: UInt32
+        let lazyOff: UInt32; let lazySize: UInt32
+        let exportOff: UInt32; let exportSize: UInt32
+    }
+    private struct LoadCommandInventory {
+        let symtab: SymtabInfo?
+        let dysymtab: DysymtabInfo?
+        let dyldInfos: [DyldInfo]
+        let commandCount: UInt32
+    }
+
+    /// Parse only classic binding-related load-command fields from the selected thin slice.
+    /// This does not apply fixups or interpret any external address as callable.
+    private static func loadCommandInventory(_ data: Data) -> LoadCommandInventory? {
+        guard readWord(data, offset: 0) == 0xFEEDFACE,
+              let commandCount = readWord(data, offset: 16),
+              let commandBytes = readWord(data, offset: 20),
+              commandCount <= 16_384 else { return nil }
+        let commandEnd64 = UInt64(28) + UInt64(commandBytes)
+        guard commandEnd64 <= UInt64(data.count) else { return nil }
+        let commandEnd = Int(commandEnd64)
+        var position = 28
+        var symtab: SymtabInfo?
+        var dysymtab: DysymtabInfo?
+        var dyldInfos = [DyldInfo]()
+
+        func word(_ offset: Int) -> UInt32? {
+            guard offset >= 0, offset + 4 <= data.count else { return nil }
+            return readWord(data, offset: UInt64(offset))
+        }
+
+        for _ in 0..<Int(commandCount) {
+            guard position + 8 <= commandEnd,
+                  let command = word(position),
+                  let size = word(position + 4),
+                  size >= 8, size % 4 == 0,
+                  UInt64(position) + UInt64(size) <= UInt64(commandEnd) else { return nil }
+            let end = position + Int(size)
+            if command == 0x2, size >= 24 {
+                guard let a = word(position + 8), let b = word(position + 12),
+                      let c = word(position + 16), let d = word(position + 20) else { return nil }
+                symtab = SymtabInfo(symoff: a, nsyms: b, stroff: c, strsize: d)
+            } else if command == 0xB, size >= 80 {
+                let values = (0..<18).compactMap { word(position + 8 + $0 * 4) }
+                guard values.count == 18 else { return nil }
+                dysymtab = DysymtabInfo(
+                    ilocalsym: values[0], nlocalsym: values[1],
+                    iextdefsym: values[2], nextdefsym: values[3],
+                    iundefsym: values[4], nundefsym: values[5],
+                    tocoff: values[6], ntoc: values[7],
+                    modtaboff: values[8], nmodtab: values[9],
+                    extrefsymoff: values[10], nextrefsyms: values[11],
+                    indirectsymoff: values[12], nindirectsyms: values[13],
+                    extreloff: values[14], nextrel: values[15],
+                    locreloff: values[16], nlocrel: values[17]
+                )
+            } else if (command == 0x22 || command == 0x80000022), size >= 48 {
+                let values = (0..<10).compactMap { word(position + 8 + $0 * 4) }
+                guard values.count == 10 else { return nil }
+                dyldInfos.append(DyldInfo(
+                    command: command,
+                    rebaseOff: values[0], rebaseSize: values[1],
+                    bindOff: values[2], bindSize: values[3],
+                    weakOff: values[4], weakSize: values[5],
+                    lazyOff: values[6], lazySize: values[7],
+                    exportOff: values[8], exportSize: values[9]
+                ))
+            }
+            position = end
+        }
+        guard position == commandEnd else { return nil }
+        return LoadCommandInventory(symtab: symtab, dysymtab: dysymtab,
+                                    dyldInfos: dyldInfos, commandCount: commandCount)
+    }
+
+    private static func appendBindingMetadata(_ inventory: LoadCommandInventory?,
+                                              image: RE4MachO32Image,
+                                              lines: inout [String]) {
+        lines += ["", "[Classic binding load-command inventory]"]
+        guard let inventory else {
+            lines.append("Could not safely parse binding-related load commands from this image slice.")
+            return
+        }
+        lines.append("Load commands parsed: \(inventory.commandCount)")
+        if let sym = inventory.symtab {
+            lines.append(String(format: "LC_SYMTAB symoff=0x%X nsyms=%u stroff=0x%X strsize=0x%X",
+                                sym.symoff, sym.nsyms, sym.stroff, sym.strsize))
+            let symbolEnd = UInt64(sym.symoff) + UInt64(sym.nsyms) * 12
+            let stringEnd = UInt64(sym.stroff) + UInt64(sym.strsize)
+            lines.append("  symbol/string table file bounds: \(symbolEnd <= UInt64(image.fileBytes.count) && stringEnd <= UInt64(image.fileBytes.count) ? "IN RANGE" : "OUT OF RANGE")")
+        } else {
+            lines.append("LC_SYMTAB: absent")
+        }
+        if let dysym = inventory.dysymtab {
+            lines.append(String(format: "LC_DYSYMTAB indirectsymoff=0x%X nindirectsyms=%u", dysym.indirectsymoff, dysym.nindirectsyms))
+            lines.append(String(format: "  external relocations: off=0x%X count=%u; local relocations: off=0x%X count=%u",
+                                dysym.extreloff, dysym.nextrel, dysym.locreloff, dysym.nlocrel))
+            lines.append(String(format: "  symbol partitions: local=%u, defined-external=%u, undefined-external=%u",
+                                dysym.nlocalsym, dysym.nextdefsym, dysym.nundefsym))
+            let indirectEnd = UInt64(dysym.indirectsymoff) + UInt64(dysym.nindirectsyms) * 4
+            let extEnd = UInt64(dysym.extreloff) + UInt64(dysym.nextrel) * 8
+            let localEnd = UInt64(dysym.locreloff) + UInt64(dysym.nlocrel) * 8
+            lines.append("  indirect-symbol table bounds: \(indirectEnd <= UInt64(image.fileBytes.count) ? "IN RANGE" : "OUT OF RANGE")")
+            lines.append("  external relocation table bounds: \(extEnd <= UInt64(image.fileBytes.count) ? "IN RANGE" : "OUT OF RANGE")")
+            lines.append("  local relocation table bounds: \(localEnd <= UInt64(image.fileBytes.count) ? "IN RANGE" : "OUT OF RANGE")")
+            lines.append("  parser cross-checks: indirect imports=\(image.indirectImports.count), external relocations=\(image.dynamicExternalRelocations.count), local relocations=\(image.dynamicLocalRelocations.count)")
+        } else {
+            lines.append("LC_DYSYMTAB: absent")
+        }
+        if inventory.dyldInfos.isEmpty {
+            lines.append("LC_DYLD_INFO / LC_DYLD_INFO_ONLY: absent")
+        } else {
+            for (index, info) in inventory.dyldInfos.enumerated() {
+                let commandName = info.command == 0x22 ? "LC_DYLD_INFO" : "LC_DYLD_INFO_ONLY"
+                lines.append(String(format: "%@[%u] rebase off=0x%X size=0x%X; bind off=0x%X size=0x%X",
+                                    commandName, UInt32(index), info.rebaseOff, info.rebaseSize, info.bindOff, info.bindSize))
+                lines.append(String(format: "  weak-bind off=0x%X size=0x%X; lazy-bind off=0x%X size=0x%X; export off=0x%X size=0x%X",
+                                    info.weakOff, info.weakSize, info.lazyOff, info.lazySize, info.exportOff, info.exportSize))
+            }
+        }
+        let totalBindOpcodeBytes = inventory.dyldInfos.reduce(UInt64(0)) {
+            $0 + UInt64($1.bindSize) + UInt64($1.weakSize) + UInt64($1.lazySize)
+        }
+        lines.append("Total bind/weak/lazy opcode bytes declared by LC_DYLD_INFO: \(totalBindOpcodeBytes)")
+        if totalBindOpcodeBytes == 0, let dysym = inventory.dysymtab,
+           dysym.nindirectsyms > 0, dysym.nextrel > 0, !image.indirectImports.isEmpty {
+            lines.append("Format evidence: bind opcode streams are empty while LC_DYSYMTAB indirect-symbol and external-relocation tables are populated.")
+            lines.append("Interpretation: consistent with the classic symbol/relocation metadata path; no dyld bind opcodes were available to decode.")
+        }
+        lines += ["", "[LC_DYSYMTAB external relocation summary]"]
+        lines.append("Parsed external relocations: \(image.dynamicExternalRelocations.count)")
+        var typeCounts = [UInt8: Int]()
+        for relocation in image.dynamicExternalRelocations { typeCounts[relocation.type, default: 0] += 1 }
+        for type in typeCounts.keys.sorted() {
+            lines.append(String(format: "  relocation type=%u count=%d", UInt32(type), typeCounts[type] ?? 0))
+        }
+        let namedRelocs = image.dynamicExternalRelocations.filter { $0.isExternal && $0.symbolName != nil }
+        let symbolCounts = Dictionary(grouping: namedRelocs, by: { $0.symbolName ?? "" }).mapValues { $0.count }
+        lines += ["", "[Most frequent external-relocation symbols]"]
+        let frequent = symbolCounts.sorted {
+            if $0.value != $1.value { return $0.value > $1.value }
+            return $0.key < $1.key
+        }
+        if frequent.isEmpty { lines.append("(no named external relocation symbols)") }
+        for (name, count) in frequent.prefix(24) {
+            lines.append("  \(name): \(count)")
+        }
+        lines += ["", "[Indirect-import sections by kind]"]
+        let sectionGroups = Dictionary(grouping: image.indirectImports, by: { "\($0.sectionName) type=\($0.sectionType)" })
+        for key in sectionGroups.keys.sorted() {
+            lines.append("  \(key): \(sectionGroups[key]?.count ?? 0)")
+        }
+    }
+
     public static func report(image: RE4MachO32Image,
                               memory: RE4GuestMemoryReading,
                               dyldSectionWordLimit: Int = 16,
@@ -107,6 +280,7 @@ public enum RE4MachO32LegacyDyldAudit {
             ""
         ]
 
+        appendBindingMetadata(loadCommandInventory(image.fileBytes), image: image, lines: &lines)
         lines.append("[__DATA,__dyld section contents]")
         if dyldSections.isEmpty {
             lines.append("(no __dyld section in parsed section table)")
@@ -193,6 +367,12 @@ public enum RE4MachO32LegacyDyldAudit {
         _ = try RE4MachO32Loader.map(image, into: memory)
         let output = try report(image: image, memory: memory, dyldSectionWordLimit: 4, lazySlotLimit: 4)
         guard output.contains("Classic dyld lazy-binding audit PASS"),
+              output.contains("[Classic binding load-command inventory]"),
+              output.contains("LC_SYMTAB symoff="),
+              output.contains("LC_DYSYMTAB indirectsymoff="),
+              output.contains("LC_DYLD_INFO[0]"),
+              output.contains("Total bind/weak/lazy opcode bytes declared by LC_DYLD_INFO:"),
+              output.contains("[LC_DYSYMTAB external relocation summary]"),
               output.contains("Classic __la_symbol_ptr imports: 1"),
               output.contains("_malloc slot=0x00003000"),
               output.contains("Bind record: stream=bind symbol=_malloc ordinal=1"),
@@ -200,7 +380,7 @@ public enum RE4MachO32LegacyDyldAudit {
               output.contains("Pointers changed: NO") else {
             throw RE4MachO32LegacyDyldAuditError.selfTestFailed
         }
-        return "Classic dyld lazy-binding audit self-test PASS\nIndirect lazy-pointer inventory cross-checked with decoded bind metadata.\nSection dump stays within file-backed bounds.\nRead-only: no pointer changed and no code executed."
+        return "Classic dyld lazy-binding audit self-test PASS\nLoad-command metadata and classic relocation tables cross-checked.\nIndirect lazy-pointer inventory cross-checked with decoded bind metadata.\nSection dump stays within file-backed bounds.\nRead-only: no pointer changed and no code executed."
     }
 }
 
