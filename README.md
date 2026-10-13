@@ -7,7 +7,7 @@ This is an iOS texture-decoder and Metal-display smoke test. It is **not a playa
 - Generates a tiny synthetic MCT checkerboard in memory (no copyrighted game assets are bundled).
 - Decodes supported MCT layouts into RGBA8: raw RGBA format 2, indexed RGB format 6, indexed RGBA format 7, and the observed sub-block/LZW-compressed format-6 layout.
 - Uploads the decoded pixels to an actual `MTLTexture` and displays it through `MTKView` and a native Metal shader.
-- Lets you tap **「匯入 .mct」** on iPhone and select an MCT file from the Files picker.
+- Uses the native `UIDocumentPickerViewController` in copy-import mode to open files from the iPhone Files picker, then checks the `.mct` extension before decoding.
 - Shows the source dimensions, format/compression flags, byte counts, and SHA-256 hash to help compare decoder results.
 
 The guest-object registry / ARM interpreter and the game's full render-state pipeline are not integrated yet. Passing this stage proves only the MCT → RGBA8 → Metal preview path.
