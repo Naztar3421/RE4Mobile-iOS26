@@ -184,10 +184,10 @@ public enum RE4MachO32ImportBindingPlanner {
               site?.sectionType == 7, site?.entrySize == 4, plan.outOfSegmentSites.isEmpty else {
             throw RE4MachO32ImportPlannerTestError.failed("lazy-pointer slot and segment boundary")
         }
-        guard plan.dyldBindRecordCount == 0 else {
-            throw RE4MachO32ImportPlannerTestError.failed("fixture should use legacy indirect symbols")
+        guard plan.dyldBindRecordCount == 1 else {
+            throw RE4MachO32ImportPlannerTestError.failed("synthetic fixture should preserve its independent dyld bind record")
         }
-        return "Mach-O import binding plan self-test PASS\n_malloc classified as C runtime (inventory only).\nLazy-pointer slot 0x00003000 validated in __DATA.\nLegacy indirect-symbol table detected; dyld bind stream is empty.\nNo pointer was patched and no import was executed."
+        return "Mach-O import binding plan self-test PASS\n_malloc classified as C runtime (inventory only).\nLazy-pointer slot 0x00003000 validated in __DATA.\nLegacy indirect table site and separate dyld bind record both retained.\nNo pointer was patched and no import was executed."
     }
 }
 private enum RE4MachO32ImportPlannerTestError: Error { case failed(String) }
