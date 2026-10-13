@@ -473,7 +473,6 @@ private struct MCTMetalPreview: UIViewRepresentable {
                 }
             }
         }
-        }
     }
 }
 
