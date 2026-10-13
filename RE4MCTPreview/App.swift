@@ -14,6 +14,7 @@ struct ContentView: View {
     @State private var mctData = SyntheticMCTFixture.makeCheckerboard()
     @State private var sourceName = "內建合成樣本"
     @State private var showingImporter = false
+    @State private var blackAsTransparentPreview = false
     @State private var status = "等待貼圖解碼結果……"
     @State private var details = "啟動時先顯示內建合成測試，尚未匯入原版遊戲貼圖。"
 
@@ -27,10 +28,10 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            MCTMetalPreview(data: mctData) { info, error in
+            MCTMetalPreview(data: mctData, blackAsTransparent: blackAsTransparentPreview) { info, error in
                 if let info {
                     status = "成功：\(sourceName) 已解碼並交給 Metal 顯示。"
-                    details = "來源：\(sourceName)\n尺寸：\(info.width) × \(info.height)\n格式：\(info.format)／壓縮：\(info.compression)\nMCT：\(info.sourceBytes) bytes；RGBA8：\(info.rgbaBytes) bytes\nSHA-256：\(info.sha256)"
+                    details = "來源：\(sourceName)\n尺寸：\(info.width) × \(info.height)\n格式：\(info.format)／壓縮：\(info.compression)\nMCT：\(info.sourceBytes) bytes；RGBA8：\(info.rgbaBytes) bytes\nRGBA透明像素：\(info.transparentPixels)\n純黑不透明像素：\(info.blackPixels)\nSHA-256：\(info.sha256)"
                 } else {
                     status = "載入失敗"
                     details = error ?? "未知錯誤"
@@ -47,6 +48,21 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .textSelection(.enabled)
+
+            Button {
+                blackAsTransparentPreview.toggle()
+            } label: {
+                Label(
+                    blackAsTransparentPreview ? "黑色透明預覽：開" : "黑色透明預覽：關",
+                    systemImage: blackAsTransparentPreview ? "checkerboard.rectangle" : "circle.lefthalf.filled"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+
+            Text("診斷模式：開啟後會把純黑像素以棋盤底色顯示，便於判斷黑區是否可能是色鍵背景；這不是對遊戲透明規則的定論。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
             HStack(spacing: 12) {
                 Button("重新載入合成樣本") {
@@ -106,11 +122,14 @@ private struct MCTPreviewInfo {
     let compression: UInt16
     let sourceBytes: Int
     let rgbaBytes: Int
+    let transparentPixels: Int
+    let blackPixels: Int
     let sha256: String
 }
 
 private struct MCTMetalPreview: UIViewRepresentable {
     let data: Data
+    let blackAsTransparent: Bool
     let onResult: (MCTPreviewInfo?, String?) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(onResult: onResult) }
@@ -122,13 +141,13 @@ private struct MCTMetalPreview: UIViewRepresentable {
         view.enableSetNeedsDisplay = false
         view.isPaused = false
         context.coordinator.onResult = onResult
-        context.coordinator.load(data, into: view)
+        context.coordinator.load(data, blackAsTransparent: blackAsTransparent, into: view)
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
         context.coordinator.onResult = onResult
-        context.coordinator.load(data, into: uiView)
+        context.coordinator.load(data, blackAsTransparent: blackAsTransparent, into: uiView)
     }
 
     @MainActor
@@ -142,8 +161,9 @@ private struct MCTMetalPreview: UIViewRepresentable {
             self.onResult = onResult
         }
 
-        func load(_ data: Data, into view: MTKView) {
+        func load(_ data: Data, blackAsTransparent: Bool, into view: MTKView) {
             let sourceHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            renderer?.setBlackAsTransparentPreview(blackAsTransparent)
             if loadedHash == sourceHash, let loadedInfo {
                 // An imported file can be byte-identical to the built-in fixture.
                 // Still report success after its display name/source changes.
@@ -184,10 +204,23 @@ private struct MCTMetalPreview: UIViewRepresentable {
                 }
                 if let renderer {
                     renderer.setTexture(texture)
+                    renderer.setBlackAsTransparentPreview(blackAsTransparent)
                 } else {
-                    renderer = try RE4MetalTexturePreviewRenderer(view: view, texture: texture, device: device)
+                    let newRenderer = try RE4MetalTexturePreviewRenderer(view: view, texture: texture, device: device)
+                    newRenderer.setBlackAsTransparentPreview(blackAsTransparent)
+                    renderer = newRenderer
                 }
                 loadedHash = sourceHash
+                let rgba = [UInt8](decoded.rgba8)
+                var transparentPixels = 0
+                var blackPixels = 0
+                for offset in stride(from: 0, to: rgba.count, by: 4) {
+                    if rgba[offset + 3] < 255 { transparentPixels += 1 }
+                    if rgba[offset] <= 1 && rgba[offset + 1] <= 1 &&
+                       rgba[offset + 2] <= 1 && rgba[offset + 3] == 255 {
+                        blackPixels += 1
+                    }
+                }
                 let info = MCTPreviewInfo(
                     width: decoded.width,
                     height: decoded.height,
@@ -195,6 +228,8 @@ private struct MCTMetalPreview: UIViewRepresentable {
                     compression: decoded.sourceCompression,
                     sourceBytes: data.count,
                     rgbaBytes: decoded.rgba8.count,
+                    transparentPixels: transparentPixels,
+                    blackPixels: blackPixels,
                     sha256: sourceHash
                 )
                 loadedInfo = info
