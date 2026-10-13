@@ -13,9 +13,10 @@ struct RE4MCTPreviewApp: App {
 
 struct ContentView: View {
     @State private var mctData = SyntheticMCTFixture.makeCheckerboard()
+    @State private var sourceName = "內建合成樣本"
     @State private var showingImporter = false
-    @State private var status = "初始化中，等待預覽結果……"
-    @State private var details = "這是程式產生的合成測試圖，不含遊戲素材。"
+    @State private var status = "等待貼圖解碼結果……"
+    @State private var details = "啟動時先顯示內建合成測試，尚未匯入原版遊戲貼圖。"
 
     var body: some View {
         VStack(spacing: 14) {
@@ -29,8 +30,8 @@ struct ContentView: View {
 
             MCTMetalPreview(data: mctData) { info, error in
                 if let info {
-                    status = "成功：MCT 已解碼，並交給 Metal 顯示。"
-                    details = "來源：\(info.name)\n尺寸：\(info.width) × \(info.height)\n格式：\(info.format)／壓縮：\(info.compression)\nMCT：\(info.sourceBytes) bytes；RGBA8：\(info.rgbaBytes) bytes\nMCT SHA-256：\(info.sha256)"
+                    status = "成功：\(sourceName) 已解碼並交給 Metal 顯示。"
+                    details = "來源：\(sourceName)\n尺寸：\(info.width) × \(info.height)\n格式：\(info.format)／壓縮：\(info.compression)\nMCT：\(info.sourceBytes) bytes；RGBA8：\(info.rgbaBytes) bytes\nSHA-256：\(info.sha256)"
                 } else {
                     status = "載入失敗"
                     details = error ?? "未知錯誤"
@@ -50,6 +51,7 @@ struct ContentView: View {
 
             HStack(spacing: 12) {
                 Button("重新載入合成樣本") {
+                    sourceName = "內建合成樣本"
                     mctData = SyntheticMCTFixture.makeCheckerboard()
                 }
                 .buttonStyle(.bordered)
@@ -69,7 +71,7 @@ struct ContentView: View {
             isPresented: $showingImporter,
             // The document picker does not always recognize custom .mct UTI declarations.
             // Permit any file here, then validate the extension ourselves.
-            allowedContentTypes: [.item],
+            allowedContentTypes: [.re4MCT],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -77,13 +79,17 @@ struct ContentView: View {
                 guard let url = urls.first else { return }
                 guard url.pathExtension.lowercased() == "mct" else {
                     status = "檔案類型不符"
-                    details = "請選取副檔名為 .mct 的貼圖檔。\n你也可以先下載對話中提供的合成測試 MCT，確認檔案選擇器可正常運作。"
+                    details = "請選取副檔名為 .mct 的貼圖檔。"
                     return
                 }
                 let accessed = url.startAccessingSecurityScopedResource()
                 defer { if accessed { url.stopAccessingSecurityScopedResource() } }
                 do {
-                    mctData = try Data(contentsOf: url)
+                    let imported = try Data(contentsOf: url)
+                    sourceName = url.lastPathComponent
+                    mctData = imported
+                    status = "已選取檔案，正在重新解碼……"
+                    details = url.lastPathComponent
                 } catch {
                     status = "讀取檔案失敗"
                     details = error.localizedDescription
@@ -97,7 +103,6 @@ struct ContentView: View {
 }
 
 private struct MCTPreviewInfo {
-    let name: String
     let width: Int
     let height: Int
     let format: UInt16
@@ -179,7 +184,6 @@ private struct MCTMetalPreview: UIViewRepresentable {
                 }
                 loadedHash = sourceHash
                 let info = MCTPreviewInfo(
-                    name: "MCT 貼圖",
                     width: decoded.width,
                     height: decoded.height,
                     format: decoded.sourcePixelFormat,
@@ -201,6 +205,10 @@ private struct MCTMetalPreview: UIViewRepresentable {
             }
         }
     }
+}
+
+private extension UTType {
+    static let re4MCT = UTType(importedAs: "tw.naztar.re4preview.mct")
 }
 
 /// Creates an 8×8 MCT format-2 texture so the decoder and GPU path can be tested
