@@ -67,7 +67,9 @@ struct ContentView: View {
         .padding()
         .fileImporter(
             isPresented: $showingImporter,
-            // The document picker does not always recognize custom .mct UTI declarations.\n            // Permit any file here, then validate the extension ourselves.\n            allowedContentTypes: [.item],
+            // The document picker does not always recognize custom .mct UTI declarations.
+            // Permit any file here, then validate the extension ourselves.
+            allowedContentTypes: [.item],
             allowsMultipleSelection: false
         ) { result in
             switch result {
@@ -132,7 +134,6 @@ private struct MCTMetalPreview: UIViewRepresentable {
         var onResult: (MCTPreviewInfo?, String?) -> Void
         private var renderer: RE4MetalTexturePreviewRenderer?
         private var loadedHash: String?
-        private var nextToken: UInt32 = 0x1000
 
         init(onResult: @escaping (MCTPreviewInfo?, String?) -> Void) {
             self.onResult = onResult
@@ -176,7 +177,6 @@ private struct MCTMetalPreview: UIViewRepresentable {
                 } else {
                     renderer = try RE4MetalTexturePreviewRenderer(view: view, texture: texture, device: device)
                 }
-                nextToken &+= 1
                 loadedHash = sourceHash
                 let info = MCTPreviewInfo(
                     name: "MCT 貼圖",
