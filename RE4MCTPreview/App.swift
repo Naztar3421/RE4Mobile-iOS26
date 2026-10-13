@@ -29,6 +29,8 @@ struct ContentView: View {
     @State private var machOMapTestMessage = ""
     @State private var machOReportMessage = ""
     @State private var machOMapReportMessage = ""
+    @State private var machOImportPlanTestMessage = ""
+    @State private var machOImportPlanReportMessage = ""
     @State private var loadedMachOImage: RE4MachO32Image?
     @State private var mappedMachOMemory: RE4GuestARMv6Memory?
 
@@ -183,6 +185,50 @@ struct ContentView: View {
 
             if !machOMapReportMessage.isEmpty {
                 Text(machOMapReportMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                do {
+                    machOImportPlanTestMessage = try RE4MachO32ImportBindingPlanner.runSyntheticSelfTest()
+                } catch {
+                    machOImportPlanTestMessage = "Mach-O import binding plan self-test FAIL\n\(error.localizedDescription)"
+                }
+            } label: {
+                Label("HLE 匯入繫結計畫自測", systemImage: "point.3.connected.trianglepath.dotted")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOImportPlanTestMessage.isEmpty {
+                Text(machOImportPlanTestMessage)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(machOImportPlanTestMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                if let loadedMachOImage {
+                    do {
+                        let guestSize = mappedMachOMemory?.size ?? 0x05000000
+                        let plan = try RE4MachO32ImportBindingPlanner.makePlan(loadedMachOImage, guestMemorySize: guestSize)
+                        machOImportPlanReportMessage = plan.report
+                    } catch {
+                        machOImportPlanReportMessage = "HLE 匯入計畫失敗：\(error.localizedDescription)"
+                    }
+                } else {
+                    machOImportPlanReportMessage = "請先使用「載入 Mach-O 至 Guest Memory」選取 Res4。"
+                }
+            } label: {
+                Label("產生 Res4 的 HLE 匯入計畫", systemImage: "list.bullet.rectangle")
+            }
+            .buttonStyle(.bordered)
+
+            if !machOImportPlanReportMessage.isEmpty {
+                Text(machOImportPlanReportMessage)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

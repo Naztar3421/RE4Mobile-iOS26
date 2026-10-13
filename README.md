@@ -69,3 +69,10 @@ The on-device **Mach-O 32-bit ARM 解析器自測** uses a generated fixture (th
 `RE4MachO32Loader.swift` maps validated segments at their declared guest virtual addresses, excludes `__PAGEZERO`, clears each full VM range, copies the file-backed prefix, and reports zero-fill bytes. It checks that the entry PC is within a mapped executable segment and refuses invalid memory/file ranges. Segment protections are reported, not enforced.
 
 The on-device **Mach-O Segment Mapper 自測** uses a generated asset-free ARMv6 Mach-O fixture to verify `__TEXT`, `__DATA`, `__LINKEDIT` mapping, entry opcodes, zero-fill clearing, file offsets, and rejection when guest memory is too small. **載入 Mach-O 至 Guest Memory** accepts a raw main executable extracted from the app bundle, selects its 32-bit ARM slice and maps it into the 80 MiB guest address space, retaining image and memory for follow-on work. This step does not apply relocations/binds, resolve imports/HLE, run initializers, or execute guest code.
+
+
+## Legacy Mach-O import binding plan
+
+RE4MachO32ImportBindingPlan.swift expands the older LC_DYSYMTAB indirect-symbol table into per-site records, distinguishing non-lazy pointer (section type 6), lazy pointer (type 7), and symbol-stub (type 8) sites. It groups sites by unique imported symbol, classifies names into preliminary families (C runtime, Objective-C runtime, C++ ABI, Apple frameworks, game/engine, or review required), and checks whether each site falls inside a declared guest segment.
+
+Family labels are an inventory aid only; they do not mean the underlying API has been implemented. The on-device '產生 Res4 的 HLE 匯入計畫' reports the actual imported-symbol plan for the already mapped executable. 'HLE 匯入繫結計畫自測' uses a generated asset-free _malloc lazy-pointer fixture. This milestone does not allocate thunks, patch pointers, load dylibs, or execute imports.

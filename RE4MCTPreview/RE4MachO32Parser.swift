@@ -108,6 +108,10 @@ public struct RE4MachO32IndirectImport {
     public let sectionName: String
     public let slotAddress: UInt32
     public let isStub: Bool
+    /// Mach-O section type: 6=non-lazy pointers, 7=lazy pointers, 8=symbol stubs.
+    public let sectionType: UInt32
+    /// Bytes per pointer slot or stub, as declared by the section.
+    public let entrySize: UInt32
 }
 
 public struct RE4MachO32BindRecord {
@@ -544,9 +548,11 @@ public enum RE4MachO32Parser {
                         if symbolIndex & 0xC0000000 != 0 || symbolIndex >= UInt32(symbols.count) { continue }
                         let symbol = symbols[Int(symbolIndex)]
                         guard symbol.isUndefined, !symbol.name.isEmpty else { continue }
+                        guard symbol.isExternal else { continue }
                         indirectImports.append(RE4MachO32IndirectImport(
                             symbolName: symbol.name, sectionName: section.name,
-                            slotAddress: section.address &+ UInt32(slot * entrySize), isStub: isStub
+                            slotAddress: section.address &+ UInt32(slot * entrySize), isStub: isStub,
+                            sectionType: section.type, entrySize: UInt32(entrySize)
                         ))
                     }
                 }
