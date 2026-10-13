@@ -106,3 +106,10 @@ The parser now reports the external/local relocation tables declared by `LC_DYSY
 The on-device “檢查 Entry 間接指標／Fixup（唯讀）” audits the two pointer slots inferred from the current Res4 ARMv6 entry-path report (`0x001C13DC` and `0x001C13E0`). It shows the containing segment/section, backing file offset and raw word, current mapped word, classic indirect-symbol entry, section/dynamic relocation matches, and dyld bind records. These preset addresses apply to the tested Res4 build only.
 
 A zero pointer is not assumed to be null or to require relocation. The audit only reports whether the parser found a matching import/fixup-related record for that exact slot. No pointer is modified and no guest code executes.
+
+
+## Classic non-lazy import slot and guest _exit
+
+The Res4 pointer audit identifies `0x001C13E0` as a `__DATA,__nl_symbol_ptr` slot whose classic indirect symbol is the undefined external `_exit`. The zero in the on-disk slot is treated as unresolved import state, not as a resolved function pointer. Since this old-style image has no dyld bind stream, the indirect-symbol table plus symbol table is the relevant import inventory for a legacy binder; the presence/absence of a relocation record at the exact slot alone is not decisive.
+
+The HLE subset now includes `_exit`, but it never invokes host process termination. It requests a guest-runtime halt and returns a result with `halted=true`, `returned=false`, and the guest exit code. The synthetic test checks that this call stops only the emulator loop and does not return through LR or terminate the iOS app. This does not enable or initiate execution of Res4's real entry point.

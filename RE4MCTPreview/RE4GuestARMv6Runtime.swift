@@ -150,6 +150,18 @@ public struct RE4GuestARMv6RunResult {
     public let registers: [UInt32]
     public let programCounter: UInt32
     public let returned: Bool
+    public let halted: Bool
+    public let exitCode: Int32?
+
+    public init(steps: Int, registers: [UInt32], programCounter: UInt32,
+                returned: Bool, halted: Bool = false, exitCode: Int32? = nil) {
+        self.steps = steps
+        self.registers = registers
+        self.programCounter = programCounter
+        self.returned = returned
+        self.halted = halted
+        self.exitCode = exitCode
+    }
 }
 
 /// Bounded interpreter for the ARM integer/VFP subset observed in the MVP-14/15/18 harness.
@@ -166,6 +178,8 @@ public final class RE4GuestARMv6Core {
     private var carry = false
     private var overflow = false
     private var vfpS = [UInt32](repeating: 0, count: 32)
+    private var terminationRequested = false
+    private var requestedExitCode: Int32?
 
     public init(memory: RE4GuestARMv6Memory, instructionHook: InstructionHook? = nil) {
         self.memory = memory
@@ -186,6 +200,12 @@ public final class RE4GuestARMv6Core {
     public func completeHostCall(returnValue: UInt32) {
         registers[0] = returnValue
         registers[15] = registers[14] & ~3
+    }
+
+    /// Request termination of the emulated guest only; this never exits or terminates the iOS host app.
+    public func requestTermination(exitCode: Int32) {
+        terminationRequested = true
+        requestedExitCode = exitCode
     }
 
     private func reg(_ index: Int, pc: UInt32) throws -> UInt32 {
@@ -517,6 +537,8 @@ public final class RE4GuestARMv6Core {
         guard maxSteps > 0 else { throw RE4GuestRuntimeError.stepLimit(limit: maxSteps, pc: entry) }
         registers = [UInt32](repeating: 0, count: 16)
         steps = 0
+        terminationRequested = false
+        requestedExitCode = nil
         negative = false; zero = false; carry = false; overflow = false
         vfpS = [UInt32](repeating: 0, count: 32)
         for (index, value) in arguments.prefix(4).enumerated() { registers[index] = value }
@@ -524,11 +546,29 @@ public final class RE4GuestARMv6Core {
         registers[14] = memory.returnSentinel
         registers[15] = entry
         for _ in 0..<maxSteps {
+            if terminationRequested {
+                return RE4GuestARMv6RunResult(
+                    steps: steps, registers: registers, programCounter: registers[15],
+                    returned: false, halted: true, exitCode: requestedExitCode
+                )
+            }
             if registers[15] == memory.returnSentinel {
                 return RE4GuestARMv6RunResult(steps: steps, registers: registers,
                                               programCounter: registers[15], returned: true)
             }
             _ = try step()
+            if terminationRequested {
+                return RE4GuestARMv6RunResult(
+                    steps: steps, registers: registers, programCounter: registers[15],
+                    returned: false, halted: true, exitCode: requestedExitCode
+                )
+            }
+        }
+        if terminationRequested {
+            return RE4GuestARMv6RunResult(
+                steps: steps, registers: registers, programCounter: registers[15],
+                returned: false, halted: true, exitCode: requestedExitCode
+            )
         }
         if registers[15] == memory.returnSentinel {
             return RE4GuestARMv6RunResult(steps: steps, registers: registers,

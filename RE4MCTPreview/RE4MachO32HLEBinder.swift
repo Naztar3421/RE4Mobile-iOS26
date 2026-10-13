@@ -56,7 +56,8 @@ public enum RE4MachO32HLEBinder {
     public static let implementedFunctions: Set<String> = [
         "_malloc", "_calloc", "_realloc", "_free",
         "_memcpy", "_memmove", "_memset", "_memcmp", "_memchr",
-        "_strlen", "_strnlen", "_strcmp", "_strncmp", "_strcpy", "_strncpy", "_strchr"
+        "_strlen", "_strnlen", "_strcmp", "_strncmp", "_strcpy", "_strncpy", "_strchr",
+        "_exit"
     ]
 
     private static func leData(_ value: UInt32) -> Data {
@@ -143,6 +144,7 @@ public enum RE4MachO32HLEBinder {
         var traps = binding.symbolByThunkAddress
         traps[trapBase &+ 4] = "_memset"
         traps[trapBase &+ 8] = "_memcpy"
+        traps[trapBase &+ 12] = "_exit"
         let dispatcher = RE4GuestARMv6HLEDispatcher(memory: memory, symbolByThunkAddress: traps)
         let cpu = RE4GuestARMv6Core(memory: memory)
         cpu.instructionHook = { pc, activeCPU in
@@ -162,7 +164,11 @@ public enum RE4MachO32HLEBinder {
         guard try memory.copyBytes(at: pointer &+ 8, count: 4) == Data([0x5A, 0x5A, 0x5A, 0x5A]) else {
             throw RE4MachO32HLETestError.failed("_memcpy copied unexpected bytes")
         }
-        return "Mach-O HLE binder/dispatcher self-test PASS\nLazy pointer 0x00003000 patched to _malloc trap.\nARM host-call returned through LR.\n_malloc allocated guest memory; _memset and _memcpy traps passed.\nNo original game code or assets executed."
+        let exitResult = try cpu.run(entry: trapBase &+ 12, arguments: [7], maxSteps: 8)
+        guard exitResult.halted, !exitResult.returned, exitResult.exitCode == 7 else {
+            throw RE4MachO32HLETestError.failed("_exit did not stop the guest with exit code 7")
+        }
+        return "Mach-O HLE binder/dispatcher self-test PASS\nLazy pointer 0x00003000 patched to _malloc trap.\nARM host-call returned through LR.\n_malloc allocated guest memory; _memset and _memcpy traps passed.\n_nonreturning _exit stopped the guest runtime with status 7.\nNo original game code or assets executed."
     }
 }
 
@@ -179,6 +185,11 @@ public final class RE4GuestARMv6HLEDispatcher {
 
     public func handleInstruction(at pc: UInt32, cpu: RE4GuestARMv6Core) throws -> Bool {
         guard let symbol = symbolByThunkAddress[pc] else { return false }
+        if symbol == "_exit" {
+            let code = try arg(0, cpu)
+            cpu.requestTermination(exitCode: Int32(bitPattern: code))
+            return true
+        }
         let result = try invoke(symbol: symbol, cpu: cpu)
         cpu.completeHostCall(returnValue: result)
         return true
