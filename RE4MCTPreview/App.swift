@@ -311,7 +311,7 @@ struct ContentView: View {
                             image: image, memory: memory
                         )
                     } catch {
-                        machOPointerFixupAuditMessage = "Pointer/fixup audit failed：\\(error.localizedDescription)"
+                        machOPointerFixupAuditMessage = "Pointer/fixup audit failed：\(error.localizedDescription)"
                     }
                 } else {
                     machOPointerFixupAuditMessage = "請先載入 Res4 至 Guest Memory。"
