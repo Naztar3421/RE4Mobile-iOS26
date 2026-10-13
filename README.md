@@ -8,13 +8,15 @@ This is an iOS texture-decoder and Metal-display smoke test. It is **not a playa
 - Decodes supported MCT layouts into RGBA8: raw RGBA format 2, indexed RGB format 6, indexed RGBA format 7, and the observed sub-block/LZW-compressed format-6 layout.
 - Uploads the decoded pixels to an actual `MTLTexture` and displays it through `MTKView` and a native Metal shader.
 - Uses the native `UIDocumentPickerViewController` in copy-import mode to open files from the iPhone Files picker, then checks the `.mct` extension before decoding.
-- Shows the source dimensions, format/compression flags, byte counts, and SHA-256 hash to help compare decoder results.
+- Preserves the original texture aspect ratio during display, composites source alpha over a checkerboard, and provides an optional black-key diagnostic toggle (not claimed as the game's exact transparency rule).
+- Shows source dimensions, format/compression flags, RGBA alpha/black pixel counts, byte counts, and SHA-256 hash.
+- CI validates four generated asset-free fixtures byte-for-byte: format 2 RGBA, format 6 RGB palette, format 7 RGBA palette, and format 6 sub-block/LZW compression.
 
 The guest-object registry / ARM interpreter and the game's full render-state pipeline are not integrated yet. Passing this stage proves only the MCT → RGBA8 → Metal preview path.
 
 ## Build on GitHub Actions
 
-Pushes to `main` run the **Build unsigned iOS preview IPA** workflow. It first compiles and executes the Foundation-only decoder against a generated synthetic MCT fixture, then builds an unsigned iOS IPA on a macOS runner and uploads the IPA plus build log as an artifact.
+Pushes to `main` run the **Build unsigned iOS preview IPA** workflow. It first compiles and executes the Foundation-only decoder against four generated synthetic MCT fixtures and compares every output byte, then builds an unsigned iOS IPA on a macOS runner and uploads the IPA plus build log as an artifact.
 
 1. Open the repository's **Actions** tab.
 2. Open the latest **Build unsigned iOS preview IPA** run.
