@@ -1,13 +1,28 @@
 # RE4 MCT / Metal Preview
 
-This repository currently contains a minimal iOS Metal rendering smoke-test app. It draws a generated shader pattern and is intended to verify the native Metal view/pipeline path.
+This is an iOS texture-decoder and Metal-display smoke test. It is **not a playable RE4 port** and does not run the original ARMv6 game runtime.
 
-**Current limitation:** the MCT decoder and game runtime have not yet been integrated into this repository. This is not a playable RE4 app. The repository intentionally excludes the game IPA and extracted game assets.
+## What the current app does
 
-## Cloud build
+- Generates a tiny synthetic MCT checkerboard in memory (no copyrighted game assets are bundled).
+- Decodes supported MCT layouts into RGBA8: raw RGBA format 2, indexed RGB format 6, indexed RGBA format 7, and the observed sub-block/LZW-compressed format-6 layout.
+- Uploads the decoded pixels to an actual `MTLTexture` and displays it through `MTKView` and a native Metal shader.
+- Lets you tap **「匯入 .mct」** on iPhone and select an MCT file from the Files picker.
+- Shows the source dimensions, format/compression flags, byte counts, and SHA-256 hash to help compare decoder results.
 
-GitHub Actions uses a macOS runner and Xcode to build an unsigned IPA. See Actions → Build unsigned iOS preview IPA. The IPA must be signed with your own Apple developer identity before installation; an unsigned IPA cannot be installed directly.
+The guest-object registry / ARM interpreter and the game's full render-state pipeline are not integrated yet. Passing this stage proves only the MCT → RGBA8 → Metal preview path.
 
-## Build locally
+## Build on GitHub Actions
 
-Install XcodeGen, then run `xcodegen generate` and build the `RE4MCTPreview` scheme in Xcode. The GitHub Actions workflow performs the unsigned device build and packages the app as an IPA.
+Pushes to `main` run the **Build unsigned iOS preview IPA** workflow. It first compiles and executes the Foundation-only decoder against a generated synthetic MCT fixture, then builds an unsigned iOS IPA on a macOS runner and uploads the IPA plus build log as an artifact.
+
+1. Open the repository's **Actions** tab.
+2. Open the latest **Build unsigned iOS preview IPA** run.
+3. Once successful, download `RE4MCTPreview-unsigned-ipa` from **Artifacts**.
+4. The IPA is unsigned: sign it with your own Apple developer identity before installing it on the iPhone.
+
+The repository intentionally excludes the game IPA and extracted game resources. To test an actual texture, transfer an MCT file you are authorized to use into the iPhone's Files app, then choose it from within the preview app. The decoder metadata and displayed output can then be used to check real-device rendering. Do not upload account credentials, certificates, the full IPA, or extracted game resource packs.
+
+## Local build
+
+Install XcodeGen, run `xcodegen generate`, and build the `RE4MCTPreview` scheme in Xcode. The deployment target is iOS 16.0. No JIT or game-engine compatibility is claimed by this project.
