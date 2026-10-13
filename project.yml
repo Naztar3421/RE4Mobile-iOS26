@@ -10,28 +10,13 @@ targets:
     sources:
       - path: RE4MCTPreview
     info:
-      properties:
-        UTImportedTypeDeclarations:
-          - UTTypeIdentifier: tw.naztar.re4preview.mct
-            UTTypeDescription: RE4 MCT Texture
-            UTTypeConformsTo:
-              - public.data
-            UTTypeTagSpecification:
-              public.filename-extension:
-                - mct
-        CFBundleDocumentTypes:
-          - CFBundleTypeName: RE4 MCT Texture
-            CFBundleTypeRole: Viewer
-            LSItemContentTypes:
-              - tw.naztar.re4preview.mct
-            LSTypeIsPackage: false
+      path: RE4MCTPreview-Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tw.naztar.re4preview
         PRODUCT_NAME: RE4MCTPreview
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
-        GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIStatusBarStyle: UIStatusBarStyleLightContent
