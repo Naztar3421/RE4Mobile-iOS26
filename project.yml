@@ -9,6 +9,22 @@ targets:
     platform: iOS
     sources:
       - path: RE4MCTPreview
+    info:
+      properties:
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: tw.naztar.re4preview.mct
+            UTTypeDescription: RE4 MCT Texture
+            UTTypeConformsTo:
+              - public.data
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - mct
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: RE4 MCT Texture
+            CFBundleTypeRole: Viewer
+            LSItemContentTypes:
+              - tw.naztar.re4preview.mct
+            LSTypeIsPackage: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: tw.naztar.re4preview
