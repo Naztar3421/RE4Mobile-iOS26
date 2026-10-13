@@ -11,6 +11,7 @@ swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32HLEBinder.swift" \
        "$ROOT/RE4MCTPreview/RE4ARMv6EntryPreflight.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32PointerFixupAudit.swift" \
+       "$ROOT/RE4MCTPreview/RE4MachO32LegacyDyldAudit.swift" \
        "$ROOT/tools/test-mach-o32.swift" \
        -o "$TMP/macho32-test"
 "$TMP/macho32-test"

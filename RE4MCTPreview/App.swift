@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var machODirectCallAuditMessage = ""
     @State private var machOStubTargetAuditMessage = ""
     @State private var machOStubSlotAuditMessage = ""
+    @State private var machOLegacyDyldAuditMessage = ""
     @State private var machOPointerFixupAuditMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
@@ -421,6 +422,32 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
 
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    do {
+                        machOLegacyDyldAuditMessage = try RE4MachO32LegacyDyldAudit.report(
+                            image: image, memory: memory, dyldSectionWordLimit: 16, lazySlotLimit: 48
+                        )
+                    } catch {
+                        machOLegacyDyldAuditMessage = "Legacy dyld audit failed：\(error.localizedDescription)"
+                    }
+                } else {
+                    machOLegacyDyldAuditMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("檢查舊式 dyld lazy binding／__dyld 區段（唯讀）", systemImage: "list.bullet.rectangle")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOLegacyDyldAuditMessage.isEmpty {
+                Text(machOLegacyDyldAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machOLegacyDyldAuditMessage.contains("lazy-binding audit PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
             Button {
                 if let image = loadedMachOImage, let memory = mappedMachOMemory {
                     do {
@@ -525,6 +552,7 @@ struct ContentView: View {
                             machODirectCallAuditMessage = ""
                             machOStubTargetAuditMessage = ""
                             machOStubSlotAuditMessage = ""
+                            machOLegacyDyldAuditMessage = ""
                             machOPointerFixupAuditMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)

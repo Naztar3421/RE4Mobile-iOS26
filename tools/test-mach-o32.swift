@@ -14,6 +14,8 @@ enum MachO32ParserTest {
             print(try RE4ARMv6EntryPreflight.runSyntheticSelfTest())
             print("")
             print(try RE4MachO32PointerFixupAudit.runSyntheticSelfTest())
+            print("")
+            print(try RE4MachO32LegacyDyldAudit.runSyntheticSelfTest())
         } catch {
             fputs("FAIL: \(error.localizedDescription)\n", stderr)
             exit(1)

@@ -146,3 +146,10 @@ Two additional read-only controls are available:
 - audit the two pointer slots against raw file words, mapped words, section/indirect-symbol metadata, relocation tables and dyld binds.
 
 No code, pointer slot, or HLE binding is changed by these diagnostics.
+
+
+## Classic dyld lazy-binding audit (read-only)
+
+The “檢查舊式 dyld lazy binding／__dyld 區段（唯讀）” report dumps the parsed `__DATA,__dyld` section as raw-file and guest-mapped words, inventories classic `__la_symbol_ptr` entries from the indirect-symbol table, cross-references per-slot dyld bind records, and counts pointers that still target the in-image `dyld_stub_binding_helper`. It also reports when a non-zero value falls outside the executable's mapped VM segments.
+
+This audit is diagnostic only: it neither invokes the dyld helper nor patches or resolves imports. The observed `0x2FE01000` value is classified by address range only; its exact owning system mapping is not inferred from the executable alone.
