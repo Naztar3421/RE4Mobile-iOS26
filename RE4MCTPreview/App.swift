@@ -24,6 +24,7 @@ struct ContentView: View {
     @State private var status = "等待貼圖解碼結果……"
     @State private var details = "啟動時先顯示內建合成測試，尚未匯入原版遊戲貼圖。"
     @State private var exportMessage = ""
+    @State private var armv6SelfTestMessage = ""
 
     var body: some View {
         ScrollView {
@@ -111,6 +112,25 @@ struct ContentView: View {
                 .multilineTextAlignment(.center)
 
             Button {
+                do {
+                    armv6SelfTestMessage = try RE4GuestARMv6Core.runSelfTest()
+                } catch {
+                    armv6SelfTestMessage = "ARMv6 core self-test FAIL\n\(error.localizedDescription)"
+                }
+            } label: {
+                Label("ARMv6 核心指令自測", systemImage: "cpu")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !armv6SelfTestMessage.isEmpty {
+                Text(armv6SelfTestMessage)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(armv6SelfTestMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
                 exportDecodedPNG()
             } label: {
                 Label("匯出解碼後 RGBA8 PNG", systemImage: "square.and.arrow.up")
@@ -131,6 +151,7 @@ struct ContentView: View {
                     mctData = SyntheticMCTFixture.makeCheckerboard()
                     uploadBridgeSmokeTest = false
                     capturedLoadObjReplay = false
+                    armv6SelfTestMessage = ""
                     exportMessage = ""
                 }
                 .buttonStyle(.bordered)
@@ -166,6 +187,7 @@ struct ContentView: View {
                             details = "檔案已複製到 App 暫存空間，正在解析 MCT 標頭與貼圖資料。"
                             uploadBridgeSmokeTest = false
                             capturedLoadObjReplay = false
+                            armv6SelfTestMessage = ""
                             exportMessage = ""
                             mctData = imported
                         } catch {
