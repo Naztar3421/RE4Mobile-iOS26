@@ -14,7 +14,7 @@ struct RE4MCTPreviewApp: App {
 struct ContentView: View {
     @State private var mctData = SyntheticMCTFixture.makeCheckerboard()
     @State private var showingImporter = false
-    @State private var status = "正在解碼合成 MCT，並上傳 Metal texture……"
+    @State private var status = "初始化中，等待預覽結果……"
     @State private var details = "這是程式產生的合成測試圖，不含遊戲素材。"
 
     var body: some View {
@@ -67,12 +67,17 @@ struct ContentView: View {
         .padding()
         .fileImporter(
             isPresented: $showingImporter,
-            allowedContentTypes: [UTType(filenameExtension: "mct") ?? .data, .data],
+            // The document picker does not always recognize custom .mct UTI declarations.\n            // Permit any file here, then validate the extension ourselves.\n            allowedContentTypes: [.item],
             allowsMultipleSelection: false
         ) { result in
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
+                guard url.pathExtension.lowercased() == "mct" else {
+                    status = "檔案類型不符"
+                    details = "請選取副檔名為 .mct 的貼圖檔。\n你也可以先下載對話中提供的合成測試 MCT，確認檔案選擇器可正常運作。"
+                    return
+                }
                 let accessed = url.startAccessingSecurityScopedResource()
                 defer { if accessed { url.stopAccessingSecurityScopedResource() } }
                 do {
@@ -173,21 +178,26 @@ private struct MCTMetalPreview: UIViewRepresentable {
                 }
                 nextToken &+= 1
                 loadedHash = sourceHash
-                onResult(
-                    MCTPreviewInfo(
-                        name: "匯入／合成 MCT",
-                        width: decoded.width,
-                        height: decoded.height,
-                        format: decoded.sourcePixelFormat,
-                        compression: decoded.sourceCompression,
-                        sourceBytes: data.count,
-                        rgbaBytes: decoded.rgba8.count,
-                        sha256: sourceHash
-                    ),
-                    nil
+                let info = MCTPreviewInfo(
+                    name: "MCT 貼圖",
+                    width: decoded.width,
+                    height: decoded.height,
+                    format: decoded.sourcePixelFormat,
+                    compression: decoded.sourceCompression,
+                    sourceBytes: data.count,
+                    rgbaBytes: decoded.rgba8.count,
+                    sha256: sourceHash
                 )
+                // Deferring this callback avoids mutating SwiftUI @State while
+                // UIViewRepresentable is in makeUIView/updateUIView.
+                DispatchQueue.main.async { [weak self] in
+                    self?.onResult(info, nil)
+                }
             } catch {
-                onResult(nil, error.localizedDescription)
+                let message = error.localizedDescription
+                DispatchQueue.main.async { [weak self] in
+                    self?.onResult(nil, message)
+                }
             }
         }
     }
