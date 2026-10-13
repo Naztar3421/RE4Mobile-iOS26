@@ -23,6 +23,8 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate
+      - name: Validate MCT decoder using a synthetic fixture
+        run: bash tools/validate-synthetic-mct.sh
       - name: Build unsigned app
         run: |
           set -o pipefail
