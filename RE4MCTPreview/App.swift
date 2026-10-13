@@ -31,6 +31,9 @@ struct ContentView: View {
     @State private var machOMapReportMessage = ""
     @State private var machOImportPlanTestMessage = ""
     @State private var machOImportPlanReportMessage = ""
+    @State private var machOHLEBindingReportMessage = ""
+    @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
+    @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
     @State private var loadedMachOImage: RE4MachO32Image?
     @State private var mappedMachOMemory: RE4GuestARMv6Memory?
 
@@ -236,6 +239,45 @@ struct ContentView: View {
             }
 
             Button {
+                do {
+                    machOHLEBindingReportMessage = try RE4MachO32HLEBinder.runSyntheticSelfTest()
+                } catch {
+                    machOHLEBindingReportMessage = "HLE binder/dispatcher self-test FAIL\n\(error.localizedDescription)"
+                }
+            } label: {
+                Label("HLE 指標繫結／呼叫回傳自測", systemImage: "arrow.triangle.branch")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOHLEBindingReportMessage.isEmpty {
+                Text(machOHLEBindingReportMessage)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(machOHLEBindingReportMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    do {
+                        let binding = try RE4MachO32HLEBinder.bind(image, into: memory)
+                        loadedHLEBindingResult = binding
+                        loadedHLEDispatcher = RE4GuestARMv6HLEDispatcher(
+                            memory: memory, symbolByThunkAddress: binding.symbolByThunkAddress
+                        )
+                        machOHLEBindingReportMessage = binding.report
+                    } catch {
+                        machOHLEBindingReportMessage = "Res4 HLE 繫結失敗：\(error.localizedDescription)"
+                    }
+                } else {
+                    machOHLEBindingReportMessage = "請先載入 Res4 至 Guest Memory，再套用 HLE 繫結。"
+                }
+            } label: {
+                Label("套用已支援的 HLE 匯入繫結", systemImage: "link")
+            }
+            .buttonStyle(.bordered)
+
+            Button {
                 activeSheet = .machOImporter
             } label: {
                 Label("檢查 Mach-O 執行檔", systemImage: "doc.text.magnifyingglass")
@@ -306,6 +348,9 @@ struct ContentView: View {
                             let image = try RE4MachO32Parser.parse(binary)
                             mappedMachOMemory = nil
                             loadedMachOImage = nil
+                            loadedHLEBindingResult = nil
+                            loadedHLEDispatcher = nil
+                            machOHLEBindingReportMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)
                             loadedMachOImage = image

@@ -172,6 +172,22 @@ public final class RE4GuestARMv6Core {
         self.instructionHook = instructionHook
     }
 
+    public func registerValue(_ index: Int) throws -> UInt32 {
+        guard (0..<16).contains(index) else { throw RE4GuestRuntimeError.invalidRegister(index) }
+        return registers[index]
+    }
+
+    public func setRegisterValue(_ index: Int, value: UInt32) throws {
+        guard (0..<16).contains(index) else { throw RE4GuestRuntimeError.invalidRegister(index) }
+        registers[index] = value
+    }
+
+    /// Complete a host-side ARM procedure call and return to the caller's LR.
+    public func completeHostCall(returnValue: UInt32) {
+        registers[0] = returnValue
+        registers[15] = registers[14] & ~3
+    }
+
     private func reg(_ index: Int, pc: UInt32) throws -> UInt32 {
         guard (0..<16).contains(index) else { throw RE4GuestRuntimeError.invalidRegister(index) }
         return index == 15 ? pc &+ 8 : registers[index]

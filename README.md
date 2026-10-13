@@ -76,3 +76,12 @@ The on-device **Mach-O Segment Mapper 自測** uses a generated asset-free ARMv6
 RE4MachO32ImportBindingPlan.swift expands the older LC_DYSYMTAB indirect-symbol table into per-site records, distinguishing non-lazy pointer (section type 6), lazy pointer (type 7), and symbol-stub (type 8) sites. It groups sites by unique imported symbol, classifies names into preliminary families (C runtime, Objective-C runtime, C++ ABI, Apple frameworks, game/engine, or review required), and checks whether each site falls inside a declared guest segment.
 
 Family labels are an inventory aid only; they do not mean the underlying API has been implemented. The on-device '產生 Res4 的 HLE 匯入計畫' reports the actual imported-symbol plan for the already mapped executable. 'HLE 匯入繫結計畫自測' uses a generated asset-free _malloc lazy-pointer fixture. This milestone does not allocate thunks, patch pointers, load dylibs, or execute imports.
+
+
+## Explicit HLE trap binding — first callable subset
+
+RE4MachO32HLEBinder.swift assigns deterministic trap addresses to a deliberately small libc-style subset: malloc/calloc/realloc/free, memcpy/memmove/memset/memcmp/memchr, strlen/strnlen/strcmp/strncmp/strcpy/strncpy/strchr. It patches only pointer-table entries for those symbols. Symbol-stub code remains unchanged and reaches the HLE trap through its pointer indirection. Unsupported imports remain unresolved.
+
+RE4GuestARMv6HLEDispatcher is connected to the ARM core pre-fetch instruction hook. It emulates this subset using bounds-checked guest-memory copies and returns to the guest LR. The allocator is conservative: free does not recycle memory, and realloc allocates/copies instead of resizing in place. This is not a full POSIX/libSystem implementation.
+
+The synthetic HLE test maps a generated Mach-O, patches the _malloc lazy pointer, dispatches the trap through the ARM core, verifies return through LR, and then exercises _memset and _memcpy traps. The on-device button “套用已支援的 HLE 匯入繫結” patches only the already mapped in-memory Res4 image; it does not run its entry point or initializers.

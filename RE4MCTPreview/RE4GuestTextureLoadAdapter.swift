@@ -2,11 +2,6 @@ import Foundation
 import Metal
 import CryptoKit
 
-/// Read-only copy access to guest virtual memory. Never convert a guest address to a host pointer.
-public protocol RE4GuestMemoryReading {
-    func copyBytes(at guestAddress: UInt32, count: Int) throws -> Data
-}
-
 /// Arguments saved at the original Load_Obj callsite; consume after the original guest function returns.
 public struct RE4NativeLoadObjCallContext {
     public let guestObjectAddress: UInt32
