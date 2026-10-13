@@ -160,3 +160,10 @@ This audit is diagnostic only: it neither invokes the dyld helper nor patches or
 The lazy-binding report now reads `LC_SYMTAB`, `LC_DYSYMTAB`, and `LC_DYLD_INFO`/`LC_DYLD_INFO_ONLY` fields directly from the selected Mach-O slice. It reports file-bound checks for the symbol/string, indirect-symbol, external-relocation and local-relocation tables, along with opcode-stream offsets/sizes. It also summarizes `LC_DYSYMTAB` external relocation types/symbols and indirect-import section kinds.
 
 When bind/weak/lazy opcode sizes are zero while the indirect-symbol and external-relocation tables are populated, the report labels that as **consistent with** the classic symbol/relocation metadata path. It does not assume zero bind records means zero imports, nor does it apply relocations or execute the helper. The `__DATA,__dyld` words remain raw data and are not interpreted as function pointers absent stronger format evidence.
+
+
+## Classic external-relocation audit (read-only)
+
+The current Res4 ARMv6 slice has no `LC_DYLD_INFO`/`LC_DYLD_INFO_ONLY` command, but declares 1,943 `LC_DYSYMTAB` external relocation records. A separate in-app audit now inventories each target address, containing segment/section, source file offset and raw word, mapped word, symbol index/name, and the symbol's `n_desc` library ordinal mapped to the ordered dependent dylibs. It summarizes relocation signatures, target sections, raw values, dependent dylibs and frequent symbols.
+
+This remains a metadata report only: it does not infer an addend formula, resolve a symbol to a host address, patch pointers, register Objective-C/C++ metadata, or execute code. Its purpose is to establish the exact legacy relocation requirements before any resolver is implemented.

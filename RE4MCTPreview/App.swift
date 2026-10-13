@@ -38,6 +38,7 @@ struct ContentView: View {
     @State private var machOStubTargetAuditMessage = ""
     @State private var machOStubSlotAuditMessage = ""
     @State private var machOLegacyDyldAuditMessage = ""
+    @State private var machOLegacyRelocationAuditMessage = ""
     @State private var machOPointerFixupAuditMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
@@ -448,6 +449,28 @@ struct ContentView: View {
                     .textSelection(.enabled)
             }
 
+
+            Button {
+                if let image = loadedMachOImage, let memory = mappedMachOMemory {
+                    machOLegacyRelocationAuditMessage = RE4MachO32LegacyRelocationAudit.report(
+                        image: image, memory: memory, exampleLimit: 24
+                    )
+                } else {
+                    machOLegacyRelocationAuditMessage = "請先載入 Res4 至 Guest Memory。"
+                }
+            } label: {
+                Label("檢查 classic external relocations／符號 dylib 來源（唯讀）", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOLegacyRelocationAuditMessage.isEmpty {
+                Text(machOLegacyRelocationAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(machOLegacyRelocationAuditMessage.contains("external relocation audit PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
             Button {
                 if let image = loadedMachOImage, let memory = mappedMachOMemory {
                     do {
@@ -553,6 +576,7 @@ struct ContentView: View {
                             machOStubTargetAuditMessage = ""
                             machOStubSlotAuditMessage = ""
                             machOLegacyDyldAuditMessage = ""
+                            machOLegacyRelocationAuditMessage = ""
                             machOPointerFixupAuditMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)
