@@ -290,6 +290,7 @@ struct ContentView: View {
 
 private enum PreviewSheet: Identifiable {
     case importer
+    case machOImporter
     case sharePNG(URL)
 
     var id: String {
