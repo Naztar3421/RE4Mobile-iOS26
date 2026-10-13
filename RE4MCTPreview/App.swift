@@ -25,6 +25,8 @@ struct ContentView: View {
     @State private var details = "啟動時先顯示內建合成測試，尚未匯入原版遊戲貼圖。"
     @State private var exportMessage = ""
     @State private var armv6SelfTestMessage = ""
+    @State private var machOTestMessage = ""
+    @State private var machOReportMessage = ""
 
     var body: some View {
         ScrollView {
@@ -131,6 +133,40 @@ struct ContentView: View {
             }
 
             Button {
+                do {
+                    machOTestMessage = try RE4MachO32Parser.runSyntheticSelfTest()
+                } catch {
+                    machOTestMessage = "Mach-O parser self-test FAIL\n\(error.localizedDescription)"
+                }
+            } label: {
+                Label("Mach-O 32-bit ARM 解析器自測", systemImage: "doc.badge.gearshape")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !machOTestMessage.isEmpty {
+                Text(machOTestMessage)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(machOTestMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                activeSheet = .machOImporter
+            } label: {
+                Label("檢查 Mach-O 執行檔", systemImage: "doc.text.magnifyingglass")
+            }
+            .buttonStyle(.bordered)
+
+            if !machOReportMessage.isEmpty {
+                Text(machOReportMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
                 exportDecodedPNG()
             } label: {
                 Label("匯出解碼後 RGBA8 PNG", systemImage: "square.and.arrow.up")
@@ -170,6 +206,31 @@ struct ContentView: View {
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
+            case .machOImporter:
+                MCTDocumentPicker { result in
+                    activeSheet = nil
+                    switch result {
+                    case .picked(let url):
+                        do {
+                            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+                            let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
+                            guard size > 0, size <= 512 * 1024 * 1024 else {
+                                throw NSError(domain: "RE4MachOInspector", code: 1,
+                                              userInfo: [NSLocalizedDescriptionKey: "檔案大小必須介於 1 byte 與 512 MiB。"])
+                            }
+                            let binary = try Data(contentsOf: url, options: .mappedIfSafe)
+                            let image = try RE4MachO32Parser.parse(binary)
+                            machOReportMessage = "檔案：\(url.lastPathComponent)\n\(image.inspectionReport)"
+                        } catch {
+                            machOReportMessage = "Mach-O 解析失敗：\(url.lastPathComponent)\n\(error.localizedDescription)\n若來源是 IPA，請先解壓縮並選取 .app 內的主執行檔，而不是整個 IPA。"
+                        }
+                    case .failed(let message):
+                        machOReportMessage = "檔案選取失敗：\(message)"
+                    case .cancelled:
+                        machOReportMessage = "已取消 Mach-O 檔案選取。"
+                    }
+                }
+                .ignoresSafeArea()
             case .importer:
                 MCTDocumentPicker { result in
                     activeSheet = nil
@@ -234,6 +295,7 @@ private enum PreviewSheet: Identifiable {
     var id: String {
         switch self {
         case .importer: return "importer"
+        case .machOImporter: return "macho-importer"
         case .sharePNG(let url): return "share-\(url.lastPathComponent)"
         }
     }
