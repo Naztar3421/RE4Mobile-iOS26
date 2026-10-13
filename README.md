@@ -92,3 +92,8 @@ The synthetic HLE test maps a generated Mach-O, patches the _malloc lazy pointer
 `RE4ARMv6EntryPreflight.swift` inspects up to 64 ARM instruction words from a loaded executable entry point without executing them. It labels common branch, block-transfer, single-transfer, extra-transfer and data-processing encodings; records branch targets; and explicitly flags SVC/coprocessor or unclassified encodings as requiring review. A handler-class label is not a proof of full instruction semantics.
 
 The on-device “檢查 Entry PC 指令（不執行）” reads from the already mapped guest memory. The synthetic fixture entry stream is generated MOV r0,#1 / ADD r0,r0,#2 / BX lr, which is decoded by the self-test but never executed by this preflight. This step must pass before designing a bounded real-entry trace; it does not start the original game's entry point or run Objective-C initializers.
+
+
+## ARMv6 entry control-flow / literal-pool static analysis
+
+The on-device entry inspection button now decodes a restricted sequential path through common ARM data-processing and LDR/STR instructions, tracks only statically knowable register values, resolves PC-relative LDR literal references and statically inferable BLX/BX targets, then stops at an unconditional BX without following it. Referenced literal words are labelled as data, not instructions. The report explicitly states that guest execution and HLE dispatch did not occur and that Mach-O fixups remain unapplied; inferred targets are not proof of runnable code.

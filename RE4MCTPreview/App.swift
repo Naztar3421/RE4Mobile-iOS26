@@ -281,8 +281,8 @@ struct ContentView: View {
             Button {
                 if let image = loadedMachOImage, let memory = mappedMachOMemory, let entry = image.entryPoint {
                     do {
-                        machOEntryPreflightMessage = try RE4ARMv6EntryPreflight.inspect(
-                            entryPoint: entry, image: image, memory: memory, instructionCount: 24
+                        machOEntryPreflightMessage = try RE4ARMv6EntryPreflight.inspectEntryControlFlow(
+                            entryPoint: entry, image: image, memory: memory, maxInstructions: 64
                         )
                     } catch {
                         machOEntryPreflightMessage = "Entry PC 預檢失敗：\(error.localizedDescription)"
@@ -291,14 +291,14 @@ struct ContentView: View {
                     machOEntryPreflightMessage = "請先載入 Res4 至 Guest Memory。"
                 }
             } label: {
-                Label("檢查 Entry PC 指令（不執行）", systemImage: "list.number")
+                Label("追蹤 Entry 控制流／Literal Pool（靜態）", systemImage: "list.number")
             }
             .buttonStyle(.borderedProminent)
 
             if !machOEntryPreflightMessage.isEmpty {
                 Text(machOEntryPreflightMessage)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(machOEntryPreflightMessage.contains("preflight PASS") ? .green : .secondary)
+                    .foregroundStyle(machOEntryPreflightMessage.contains("control-flow preflight PASS") ? .green : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
