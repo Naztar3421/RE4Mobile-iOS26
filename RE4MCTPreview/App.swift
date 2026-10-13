@@ -1,99 +1,235 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import Metal
 import MetalKit
+import CryptoKit
 
 @main
 struct RE4MCTPreviewApp: App {
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-        }
+        WindowGroup { ContentView() }
     }
 }
 
 struct ContentView: View {
+    @State private var mctData = SyntheticMCTFixture.makeCheckerboard()
+    @State private var showingImporter = false
+    @State private var status = "正在解碼合成 MCT，並上傳 Metal texture……"
+    @State private var details = "這是程式產生的合成測試圖，不含遊戲素材。"
+
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 14) {
             Text("RE4 MCT / Metal Preview")
                 .font(.title2.bold())
-            Text("Metal rendering smoke test")
+                .multilineTextAlignment(.center)
+            Text("MCT decoder → RGBA8 → native Metal")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
-            MetalPreview()
-                .frame(height: 320)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-            Text("This build tests native Metal rendering only. It does not run the game engine.")
+                .multilineTextAlignment(.center)
+
+            MCTMetalPreview(data: mctData) { info, error in
+                if let info {
+                    status = "成功：MCT 已解碼，並交給 Metal 顯示。"
+                    details = "來源：\(info.name)\n尺寸：\(info.width) × \(info.height)\n格式：\(info.format)／壓縮：\(info.compression)\nMCT：\(info.sourceBytes) bytes；RGBA8：\(info.rgbaBytes) bytes\nMCT SHA-256：\(info.sha256)"
+                } else {
+                    status = "載入失敗"
+                    details = error ?? "未知錯誤"
+                }
+            }
+            .frame(height: 320)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            Text(status)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text(details)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+
+            HStack(spacing: 12) {
+                Button("重新載入合成樣本") {
+                    mctData = SyntheticMCTFixture.makeCheckerboard()
+                }
+                .buttonStyle(.bordered)
+
+                Button("匯入 .mct") { showingImporter = true }
+                    .buttonStyle(.borderedProminent)
+            }
+            .font(.footnote)
+
+            Text("本版本驗證 MCT 貼圖解碼與 Metal 顯示，不會執行 RE4 遊戲引擎。")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .padding()
+        .fileImporter(
+            isPresented: $showingImporter,
+            allowedContentTypes: [UTType(filenameExtension: "mct") ?? .data, .data],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    mctData = try Data(contentsOf: url)
+                } catch {
+                    status = "讀取檔案失敗"
+                    details = error.localizedDescription
+                }
+            case .failure(let error):
+                status = "選取檔案失敗"
+                details = error.localizedDescription
+            }
+        }
     }
 }
 
-struct MetalPreview: UIViewRepresentable {
+private struct MCTPreviewInfo {
+    let name: String
+    let width: Int
+    let height: Int
+    let format: UInt16
+    let compression: UInt16
+    let sourceBytes: Int
+    let rgbaBytes: Int
+    let sha256: String
+}
+
+private struct MCTMetalPreview: UIViewRepresentable {
+    let data: Data
+    let onResult: (MCTPreviewInfo?, String?) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onResult: onResult) }
+
     func makeUIView(context: Context) -> MTKView {
-        let view = MTKView()
-        view.device = MTLCreateSystemDefaultDevice()
-        view.clearColor = MTLClearColor(red: 0.08, green: 0.10, blue: 0.14, alpha: 1)
+        let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
         view.colorPixelFormat = .bgra8Unorm
-        view.delegate = context.coordinator
-        context.coordinator.attach(view)
+        view.framebufferOnly = true
+        view.enableSetNeedsDisplay = false
+        view.isPaused = false
+        context.coordinator.onResult = onResult
+        context.coordinator.load(data, into: view)
         return view
     }
 
-    func updateUIView(_ uiView: MTKView, context: Context) {}
+    func updateUIView(_ uiView: MTKView, context: Context) {
+        context.coordinator.onResult = onResult
+        context.coordinator.load(data, into: uiView)
+    }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    @MainActor
+    final class Coordinator: NSObject {
+        var onResult: (MCTPreviewInfo?, String?) -> Void
+        private var renderer: RE4MetalTexturePreviewRenderer?
+        private var loadedHash: String?
+        private var nextToken: UInt32 = 0x1000
 
-    final class Coordinator: NSObject, MTKViewDelegate {
-        private var pipeline: MTLRenderPipelineState?
-        private var device: MTLDevice?
-        private var commandQueue: MTLCommandQueue?
+        init(onResult: @escaping (MCTPreviewInfo?, String?) -> Void) {
+            self.onResult = onResult
+        }
 
-        func attach(_ view: MTKView) {
-            guard let device = view.device,
-                  let queue = device.makeCommandQueue() else { return }
-            self.device = device
-            self.commandQueue = queue
-            let source = """
-            #include <metal_stdlib>
-            using namespace metal;
-            struct VOut { float4 position [[position]]; float2 uv; };
-            vertex VOut vertexMain(uint id [[vertex_id]]) {
-                float2 p[3] = { float2(-1.0,-1.0), float2(3.0,-1.0), float2(-1.0,3.0) };
-                VOut o; o.position = float4(p[id],0,1); o.uv = (p[id]+1.0)*0.5; return o;
-            }
-            fragment float4 fragmentMain(VOut in [[stage_in]]) {
-                float checker = fmod(floor(in.uv.x*8.0)+floor(in.uv.y*8.0),2.0);
-                float3 a = float3(0.08,0.18,0.28);
-                float3 b = float3(0.78,0.30,0.10);
-                return float4(mix(a,b,checker),1.0);
-            }
-            """
+        func load(_ data: Data, into view: MTKView) {
+            let sourceHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            if loadedHash == sourceHash { return }
             do {
-                let library = try device.makeLibrary(source: source, options: nil)
-                let descriptor = MTLRenderPipelineDescriptor()
-                descriptor.vertexFunction = library.makeFunction(name: "vertexMain")
-                descriptor.fragmentFunction = library.makeFunction(name: "fragmentMain")
-                descriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
-                pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
+                let decoded = try RE4MCTTextureDecoder.decode(data)
+                guard let device = view.device ?? MTLCreateSystemDefaultDevice() else {
+                    throw NSError(domain: "RE4MCTPreview", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "此裝置沒有可用的 Metal device。"])
+                }
+                view.device = device
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .rgba8Unorm,
+                    width: decoded.width,
+                    height: decoded.height,
+                    mipmapped: false
+                )
+                descriptor.usage = [.shaderRead]
+                descriptor.storageMode = .shared
+                guard let texture = device.makeTexture(descriptor: descriptor) else {
+                    throw NSError(domain: "RE4MCTPreview", code: 2,
+                                  userInfo: [NSLocalizedDescriptionKey: "無法建立 MTLTexture。"])
+                }
+                texture.label = "MCTPreview/\(decoded.width)x\(decoded.height)"
+                decoded.rgba8.withUnsafeBytes { raw in
+                    if let base = raw.baseAddress {
+                        texture.replace(
+                            region: MTLRegionMake2D(0, 0, decoded.width, decoded.height),
+                            mipmapLevel: 0,
+                            withBytes: base,
+                            bytesPerRow: decoded.bytesPerRow
+                        )
+                    }
+                }
+                if let renderer {
+                    renderer.setTexture(texture)
+                } else {
+                    renderer = try RE4MetalTexturePreviewRenderer(view: view, texture: texture, device: device)
+                }
+                nextToken &+= 1
+                loadedHash = sourceHash
+                onResult(
+                    MCTPreviewInfo(
+                        name: "匯入／合成 MCT",
+                        width: decoded.width,
+                        height: decoded.height,
+                        format: decoded.sourcePixelFormat,
+                        compression: decoded.sourceCompression,
+                        sourceBytes: data.count,
+                        rgbaBytes: decoded.rgba8.count,
+                        sha256: sourceHash
+                    ),
+                    nil
+                )
             } catch {
-                print("Metal pipeline creation failed: \(error)")
+                onResult(nil, error.localizedDescription)
             }
         }
+    }
+}
 
-        func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
-
-        func draw(in view: MTKView) {
-            guard let pipeline, let commandQueue,
-                  let pass = view.currentRenderPassDescriptor,
-                  let drawable = view.currentDrawable,
-                  let command = commandQueue.makeCommandBuffer(),
-                  let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { return }
-            encoder.setRenderPipelineState(pipeline)
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-            encoder.endEncoding()
-            command.present(drawable)
-            command.commit()
+/// Creates an 8×8 MCT format-2 texture so the decoder and GPU path can be tested
+/// without bundling copyrighted game resources.
+private enum SyntheticMCTFixture {
+    static func makeCheckerboard() -> Data {
+        let width = 8, height = 8
+        var bytes = [UInt8](repeating: 0, count: 42 + width * height * 4)
+        bytes[0] = 0x4D; bytes[1] = 0x43; bytes[2] = 0x54; bytes[3] = 0x5F
+        put16(1, at: 8, in: &bytes)
+        put16(0, at: 30, in: &bytes)
+        put16(0, at: 32, in: &bytes)
+        put16(UInt16(width), at: 34, in: &bytes)
+        put16(UInt16(height), at: 36, in: &bytes)
+        put16(0, at: 38, in: &bytes)
+        put16(2, at: 40, in: &bytes)
+        var p = 42
+        for y in 0..<height {
+            for x in 0..<width {
+                let color: [UInt8] = (((x / 2) + (y / 2)) % 2 == 0)
+                    ? [220, 75, 25, 255] : [25, 75, 120, 255]
+                bytes[p] = color[0]; bytes[p + 1] = color[1]
+                bytes[p + 2] = color[2]; bytes[p + 3] = color[3]
+                p += 4
+            }
         }
+        put32(UInt32(bytes.count - 10), at: 10, in: &bytes)
+        return Data(bytes)
+    }
+
+    private static func put16(_ value: UInt16, at offset: Int, in bytes: inout [UInt8]) {
+        bytes[offset] = UInt8(value & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
+    }
+
+    private static func put32(_ value: UInt32, at offset: Int, in bytes: inout [UInt8]) {
+        bytes[offset] = UInt8(value & 0xFF)
+        bytes[offset + 1] = UInt8((value >> 8) & 0xFF)
+        bytes[offset + 2] = UInt8((value >> 16) & 0xFF)
+        bytes[offset + 3] = UInt8((value >> 24) & 0xFF)
     }
 }
