@@ -39,6 +39,8 @@ struct ContentView: View {
     @State private var machOStubSlotAuditMessage = ""
     @State private var machOLegacyDyldAuditMessage = ""
     @State private var machOLegacyRelocationAuditMessage = ""
+    @State private var machOLegacyRelocationRecordLines: [String] = []
+    @State private var machOLegacyRelocationPage = 0
     @State private var machOPointerFixupAuditMessage = ""
     @State private var loadedHLEBindingResult: RE4MachO32HLEBindingResult?
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
@@ -451,24 +453,97 @@ struct ContentView: View {
 
 
             Button {
+                machOLegacyRelocationPage = 0
+                machOLegacyRelocationRecordLines = []
                 if let image = loadedMachOImage, let memory = mappedMachOMemory {
-                    machOLegacyRelocationAuditMessage = RE4MachO32LegacyRelocationAudit.report(
+                    let report = RE4MachO32LegacyRelocationAudit.report(
                         image: image, memory: memory, exampleLimit: 24
                     )
+                    let summaryMarker = "[Representative relocation records]"
+                    let recordsMarker = "[All external relocation records, sorted by target address]"
+                    if let summaryRange = report.range(of: summaryMarker),
+                       let recordsRange = report.range(of: recordsMarker),
+                       summaryRange.lowerBound < recordsRange.lowerBound {
+                        // Keep the summary separate from the large record inventory.
+                        machOLegacyRelocationAuditMessage = String(report[..<summaryRange.lowerBound])
+                        let recordsText = String(report[recordsRange.upperBound...])
+                        machOLegacyRelocationRecordLines = recordsText
+                            .components(separatedBy: "\n")
+                            .filter { $0.hasPrefix("#") }
+                    } else {
+                        // Never hand a huge unexpected report to a single SwiftUI Text view.
+                        machOLegacyRelocationAuditMessage = report
+                            .components(separatedBy: "\n")
+                            .prefix(70)
+                            .joined(separator: "\n")
+                        machOLegacyRelocationAuditMessage += "\n\n報告格式未能辨識；為避免畫面空白，已限制顯示長度。"
+                    }
                 } else {
                     machOLegacyRelocationAuditMessage = "請先載入 Res4 至 Guest Memory。"
                 }
             } label: {
-                Label("檢查 classic external relocations／符號 dylib 來源（唯讀）", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                Label("檢查 classic external relocations／符號 dylib 來源（唯讀）", systemImage: "point.topleft.down.curvedto.point.bottomright")
             }
             .buttonStyle(.borderedProminent)
 
             if !machOLegacyRelocationAuditMessage.isEmpty {
-                Text(machOLegacyRelocationAuditMessage)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(machOLegacyRelocationAuditMessage.contains("external relocation audit PASS") ? .green : .secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("稽核摘要")
+                        .font(.headline)
+                    ScrollView {
+                        Text(machOLegacyRelocationAuditMessage)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(machOLegacyRelocationAuditMessage.contains("external relocation audit PASS") ? .green : .secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .padding(8)
+                    }
+                    .frame(maxHeight: 300)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+
+                    if !machOLegacyRelocationRecordLines.isEmpty {
+                        let pageSize = 25
+                        let total = machOLegacyRelocationRecordLines.count
+                        let pageCount = (total + pageSize - 1) / pageSize
+                        let start = min(machOLegacyRelocationPage * pageSize, max(0, total - 1))
+                        let end = min(start + pageSize, total)
+                        Text("完整 relocation 記錄")
+                            .font(.headline)
+                        Text("每頁 25 筆；可逐頁查看全部 \(total) 筆。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Button {
+                                machOLegacyRelocationPage = max(0, machOLegacyRelocationPage - 1)
+                            } label: {
+                                Label("上一頁", systemImage: "chevron.left")
+                            }
+                            .disabled(machOLegacyRelocationPage == 0)
+                            Spacer(minLength: 4)
+                            Text("\(start + 1)–\(end) / \(total)")
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 4)
+                            Button {
+                                machOLegacyRelocationPage = min(pageCount - 1, machOLegacyRelocationPage + 1)
+                            } label: {
+                                Label("下一頁", systemImage: "chevron.right")
+                            }
+                            .disabled(machOLegacyRelocationPage >= pageCount - 1)
+                        }
+                        ScrollView {
+                            Text(machOLegacyRelocationRecordLines[start..<end].joined(separator: "\n"))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                                .padding(8)
+                        }
+                        .frame(maxHeight: 380)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Button {
@@ -577,6 +652,8 @@ struct ContentView: View {
                             machOStubSlotAuditMessage = ""
                             machOLegacyDyldAuditMessage = ""
                             machOLegacyRelocationAuditMessage = ""
+                            machOLegacyRelocationRecordLines = []
+                            machOLegacyRelocationPage = 0
                             machOPointerFixupAuditMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)
