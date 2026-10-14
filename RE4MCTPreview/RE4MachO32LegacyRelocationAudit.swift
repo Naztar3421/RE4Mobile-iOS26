@@ -49,6 +49,23 @@ public enum RE4MachO32LegacyRelocationAudit {
         }
     }
 
+    private static func relocationTypeName(_ type: UInt8, architectureName: String) -> String {
+        guard architectureName.hasPrefix("ARM") else { return "RELOC_TYPE_\(type)" }
+        switch type {
+        case 0: return "ARM_RELOC_VANILLA"
+        case 1: return "ARM_RELOC_PAIR"
+        case 2: return "ARM_RELOC_SECTDIFF"
+        case 3: return "ARM_RELOC_LOCAL_SECTDIFF"
+        case 4: return "ARM_RELOC_PB_LA_PTR"
+        case 5: return "ARM_RELOC_BR24"
+        case 6: return "ARM_THUMB_RELOC_BR22"
+        case 7: return "ARM_THUMB_32BIT_BRANCH"
+        case 8: return "ARM_RELOC_HALF"
+        case 9: return "ARM_RELOC_HALF_SECTDIFF"
+        default: return "ARM_RELOC_TYPE_\(type)"
+        }
+    }
+
     private static func makeSite(_ relocation: RE4MachO32Relocation,
                                  image: RE4MachO32Image,
                                  memory: RE4GuestMemoryReading) -> Site {
@@ -96,7 +113,9 @@ public enum RE4MachO32LegacyRelocationAudit {
                 break
             }
             if width >= 4 {
-                mappedWord = try? readWord(memory.copyBytes(at: address, count: 4))
+                if let mappedBytes = try? memory.copyBytes(at: address, count: 4) {
+                    mappedWord = readWord(mappedBytes, offset: 0)
+                }
             } else if width > 0 {
                 // Byte/halfword relocations are inventoried but are not summarized as 32-bit words.
                 mappedWord = nil
@@ -111,6 +130,18 @@ public enum RE4MachO32LegacyRelocationAudit {
             scattered: relocation.scattered, segmentName: segmentName, sectionName: sectionName,
             fileOffset: fileOffset, rawWord: rawWord, mappedWord: mappedWord
         )
+    }
+
+    private static func describe(_ site: Site, architectureName: String) -> String {
+        let width = site.length <= 3 ? (1 << site.length) : 0
+        let file = site.fileOffset.map { String(format: "0x%X", $0) } ?? "(n/a)"
+        let raw = site.rawWord.map { String(format: "0x%08X", $0) } ?? "(n/a)"
+        let mapped = site.mappedWord.map { String(format: "0x%08X", $0) } ?? "(n/a)"
+        let ordinal = site.libraryOrdinal.map { "\($0) (\(site.libraryName))" } ?? site.libraryName
+        return String(format: "  VA=0x%08X %@ file=%@ %@ (%u bytes) symbol[%u]=%@ ordinal=%@ raw=%@ mapped=%@",
+                      site.address, site.sectionName ?? site.segmentName ?? "(unmapped)",
+                      file, relocationTypeName(site.relocationType, architectureName: architectureName),
+                      UInt32(width), site.symbolIndex, site.symbolName, ordinal, raw, mapped)
     }
 
     public static func report(image: RE4MachO32Image,
@@ -222,11 +253,13 @@ public enum RE4MachO32LegacyRelocationAudit {
             }
         }
 
-        lines += ["", "[Representative relocation records]"]
         let sortedSites = sites.sorted {
             if $0.address != $1.address { return $0.address < $1.address }
-            return $0.symbolName < $1.symbolName
+            if $0.symbolName != $1.symbolName { return $0.symbolName < $1.symbolName }
+            return $0.symbolIndex < $1.symbolIndex
         }
+
+        lines += ["", "[Representative relocation records]"]
         var chosen = [Site]()
         var sectionChosen = Set<String>()
         for site in sortedSites where chosen.count < max(0, exampleLimit) {
@@ -239,11 +272,29 @@ public enum RE4MachO32LegacyRelocationAudit {
             }
         }
         for site in chosen {
-            let raw = site.rawWord.map { String(format: "0x%08X", $0) } ?? "(n/a)"
-            let mapped = site.mappedWord.map { String(format: "0x%08X", $0) } ?? "(n/a)"
-            let offset = site.fileOffset.map { String(format: "0x%X", $0) } ?? "(n/a)"
-            lines.append(String(format: "  VA=0x%08X file=%@ symbol=%@ ordinal=%@ raw=%@ mapped=%@",
-                                site.address, offset, site.symbolName, site.libraryName, raw, mapped))
+            lines.append(describe(site, architectureName: image.architectureName))
+        }
+
+        lines += ["", "[All external relocation records, sorted by target address]"]
+        lines.append("Format: index | VM address | segment/section | file offset | relocation | width | external/PC-relative/scattered | symbol table index/name | n_desc dylib ordinal/path | raw word | mapped word")
+        for (index, site) in sortedSites.enumerated() {
+            lines.append(String(format: "#%04d | VA=0x%08X | %@ | file=%@ | %@ | %u bytes | ext=%@ pcrel=%@ scattered=%@ | symbol[%u]=%@ | ordinal=%@ | raw=%@ | mapped=%@",
+                                index + 1,
+                                site.address,
+                                site.segmentName.map { segment in
+                                    site.sectionName ?? segment
+                                } ?? "(unmapped segment)",
+                                site.fileOffset.map { String(format: "0x%X", $0) } ?? "(n/a)",
+                                relocationTypeName(site.relocationType, architectureName: image.architectureName) + "(\(site.relocationType))",
+                                UInt32(1) << site.length,
+                                site.isExternal ? "YES" : "NO",
+                                site.isPCRelative ? "YES" : "NO",
+                                site.scattered ? "YES" : "NO",
+                                site.symbolIndex,
+                                site.symbolName,
+                                site.libraryOrdinal.map { "\($0) (\(site.libraryName))" } ?? site.libraryName,
+                                site.rawWord.map { String(format: "0x%08X", $0) } ?? "(n/a)",
+                                site.mappedWord.map { String(format: "0x%08X", $0) } ?? "(n/a)"))
         }
 
         lines += ["", "Interpretation boundary: this is inventory only. No relocation formula, symbol resolver, Objective-C class registration, C++ runtime object, or external address was executed."]
@@ -260,11 +311,17 @@ public enum RE4MachO32LegacyRelocationAudit {
               output.contains("External relocation records: 1"),
               output.contains("Addresses inside mapped segments: 1"),
               output.contains("Addresses inside named sections: 1"),
+              output.contains("File-backed 32-bit source words: 1"),
+              output.contains("Readable mapped 32-bit words: 1"),
+              output.contains("Raw/mapped word mismatches: 0"),
+              output.contains("[All external relocation records, sorted by target address]"),
+              output.contains("symbol[1]=_malloc"),
+              output.contains("raw=0x00000000 | mapped=0x00000000"),
               output.contains("_malloc: 1"),
               output.contains("No relocation formula") || output.contains("this report does not yet interpret them as addends") else {
             throw RE4MachO32LegacyRelocationAuditError.selfTestFailed
         }
-        return "Classic external relocation audit self-test PASS\nExternal relocation address mapped back to a section and source word.\nUndefined symbol and n_desc library ordinal retained.\nRead-only: no relocation or import applied."
+        return "Classic external relocation audit self-test PASS\nAbsolute external relocation VA mapped to its section, source offset and current word.\nSymbol, n_desc library ordinal, and dependent dylib retained.\nFull per-record inventory emitted; read-only, no relocation or import applied."
     }
 }
 

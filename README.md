@@ -167,3 +167,6 @@ When bind/weak/lazy opcode sizes are zero while the indirect-symbol and external
 The current Res4 ARMv6 slice has no `LC_DYLD_INFO`/`LC_DYLD_INFO_ONLY` command, but declares 1,943 `LC_DYSYMTAB` external relocation records. A separate in-app audit now inventories each target address, containing segment/section, source file offset and raw word, mapped word, symbol index/name, and the symbol's `n_desc` library ordinal mapped to the ordered dependent dylibs. It summarizes relocation signatures, target sections, raw values, dependent dylibs and frequent symbols.
 
 This remains a metadata report only: it does not infer an addend formula, resolve a symbol to a host address, patch pointers, register Objective-C/C++ metadata, or execute code. Its purpose is to establish the exact legacy relocation requirements before any resolver is implemented.
+
+
+The relocation audit now emits the full sorted record list after its summaries and representative rows. Each row contains the VM target address, segment/section, file offset, ARM relocation type and width, external/PC-relative/scattered flags, symbol table index/name, decoded `n_desc` library ordinal and dependency path, and raw versus mapped word. The synthetic fixture's external relocation address is an absolute VM address within its `__DATA` section, matching the loaded-image format being audited.

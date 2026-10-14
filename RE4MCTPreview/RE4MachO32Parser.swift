@@ -917,8 +917,8 @@ public enum RE4MachO32Parser {
         put32(&file, 0x2CC, 8); file[0x2D0] = 0x01; file[0x2D1] = 0; put32(&file, 0x2D4, 0)
         let strings = Array("\0_entry\0_malloc\0".utf8)
         file.replaceSubrange(0x2D8..<(0x2D8 + strings.count), with: strings)
-        put32(&file, 0x300, 1)
-        put32(&file, 0x304, 4); put32(&file, 0x308, 0x0C000001) // external ARM vanilla relocation to nlist #1
+        put32(&file, 0x300, 0x3000)
+        put32(&file, 0x304, 4); put32(&file, 0x308, 0x0C000001) // external ARM vanilla relocation at __DATA VM 0x3000 to nlist #1
         file.replaceSubrange(0x310..<(0x310 + bindStream.count), with: bindStream)
         return Data(file)
     }
