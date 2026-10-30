@@ -170,3 +170,8 @@ This remains a metadata report only: it does not infer an addend formula, resolv
 
 
 The relocation audit now emits the full sorted record list after its summaries and representative rows. Each row contains the VM target address, segment/section, file offset, ARM relocation type and width, external/PC-relative/scattered flags, symbol table index/name, decoded `n_desc` library ordinal and dependency path, and raw versus mapped word. The synthetic fixture's external relocation address is an absolute VM address within its `__DATA` section, matching the loaded-image format being audited.
+
+
+## One-tap full relocation report export
+
+The relocation audit UI retains its on-screen summary and 25-record pages, and adds a one-tap export action. It regenerates the same read-only audit report and writes one UTF-8 `.txt` file containing export metadata, the entire audit summary, representative records, and the complete sorted relocation inventory. The native iOS share sheet is then presented so the user can save the single file to Files or share it. Export does not apply relocations, alter guest memory, or execute guest code. The report can be regenerated from a freshly loaded Mach-O to establish a clean analysis baseline.

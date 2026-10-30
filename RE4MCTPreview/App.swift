@@ -39,6 +39,7 @@ struct ContentView: View {
     @State private var machOStubSlotAuditMessage = ""
     @State private var machOLegacyDyldAuditMessage = ""
     @State private var machOLegacyRelocationAuditMessage = ""
+    @State private var machOLegacyRelocationExportMessage = ""
     @State private var machOLegacyRelocationRecordLines: [String] = []
     @State private var machOLegacyRelocationPage = 0
     @State private var machOPointerFixupAuditMessage = ""
@@ -453,38 +454,26 @@ struct ContentView: View {
 
 
             Button {
-                machOLegacyRelocationPage = 0
-                machOLegacyRelocationRecordLines = []
-                if let image = loadedMachOImage, let memory = mappedMachOMemory {
-                    let report = RE4MachO32LegacyRelocationAudit.report(
-                        image: image, memory: memory, exampleLimit: 24
-                    )
-                    let summaryMarker = "[Representative relocation records]"
-                    let recordsMarker = "[All external relocation records, sorted by target address]"
-                    if let summaryRange = report.range(of: summaryMarker),
-                       let recordsRange = report.range(of: recordsMarker),
-                       summaryRange.lowerBound < recordsRange.lowerBound {
-                        // Keep the summary separate from the large record inventory.
-                        machOLegacyRelocationAuditMessage = String(report[..<summaryRange.lowerBound])
-                        let recordsText = String(report[recordsRange.upperBound...])
-                        machOLegacyRelocationRecordLines = recordsText
-                            .components(separatedBy: "\n")
-                            .filter { $0.hasPrefix("#") }
-                    } else {
-                        // Never hand a huge unexpected report to a single SwiftUI Text view.
-                        machOLegacyRelocationAuditMessage = report
-                            .components(separatedBy: "\n")
-                            .prefix(70)
-                            .joined(separator: "\n")
-                        machOLegacyRelocationAuditMessage += "\n\n報告格式未能辨識；為避免畫面空白，已限制顯示長度。"
-                    }
-                } else {
-                    machOLegacyRelocationAuditMessage = "請先載入 Res4 至 Guest Memory。"
-                }
+                runLegacyRelocationAudit(exportToFile: false)
             } label: {
                 Label("檢查 classic external relocations／符號 dylib 來源（唯讀）", systemImage: "point.topleft.down.curvedto.point.bottomright")
             }
             .buttonStyle(.borderedProminent)
+
+            Button {
+                runLegacyRelocationAudit(exportToFile: true)
+            } label: {
+                Label("一鍵匯出完整 relocation 報告（單一 TXT）", systemImage: "square.and.arrow.up.document")
+            }
+            .buttonStyle(.bordered)
+
+            if !machOLegacyRelocationExportMessage.isEmpty {
+                Text(machOLegacyRelocationExportMessage)
+                    .font(.caption)
+                    .foregroundStyle(machOLegacyRelocationExportMessage.hasPrefix("匯出完成") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
 
             if !machOLegacyRelocationAuditMessage.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
@@ -652,6 +641,7 @@ struct ContentView: View {
                             machOStubSlotAuditMessage = ""
                             machOLegacyDyldAuditMessage = ""
                             machOLegacyRelocationAuditMessage = ""
+                            machOLegacyRelocationExportMessage = ""
                             machOLegacyRelocationRecordLines = []
                             machOLegacyRelocationPage = 0
                             machOPointerFixupAuditMessage = ""
@@ -730,7 +720,83 @@ struct ContentView: View {
                 .ignoresSafeArea()
             case .sharePNG(let url):
                 PreviewActivityView(activityItems: [url])
+            case .shareTextReport(let url):
+                PreviewActivityView(activityItems: [url])
             }
+        }
+    }
+
+    private func runLegacyRelocationAudit(exportToFile: Bool) {
+        machOLegacyRelocationPage = 0
+        machOLegacyRelocationRecordLines = []
+
+        guard let image = loadedMachOImage, let memory = mappedMachOMemory else {
+            machOLegacyRelocationAuditMessage = "請先載入 Res4 至 Guest Memory。"
+            if exportToFile {
+                machOLegacyRelocationExportMessage = "匯出失敗：請先載入 Res4 至 Guest Memory。"
+            }
+            return
+        }
+
+        let report = RE4MachO32LegacyRelocationAudit.report(
+            image: image, memory: memory, exampleLimit: 24
+        )
+
+        let summaryMarker = "[Representative relocation records]"
+        let recordsMarker = "[All external relocation records, sorted by target address]"
+        if let summaryRange = report.range(of: summaryMarker),
+           let recordsRange = report.range(of: recordsMarker),
+           summaryRange.lowerBound < recordsRange.lowerBound {
+            machOLegacyRelocationAuditMessage = String(report[..<summaryRange.lowerBound])
+            let recordsText = String(report[recordsRange.upperBound...])
+            machOLegacyRelocationRecordLines = recordsText
+                .components(separatedBy: "\n")
+                .filter { $0.hasPrefix("#") }
+        } else {
+            machOLegacyRelocationAuditMessage = report
+                .components(separatedBy: "\n")
+                .prefix(70)
+                .joined(separator: "\n")
+            machOLegacyRelocationAuditMessage += "\n\n報告格式未能辨識；畫面僅顯示摘要。完整原始報告仍可匯出。"
+        }
+
+        guard exportToFile else { return }
+
+        do {
+            let recordCount = image.dynamicExternalRelocations.count
+            let timestampFormatter = DateFormatter()
+            timestampFormatter.locale = Locale(identifier: "en_US_POSIX")
+            timestampFormatter.timeZone = TimeZone.current
+            timestampFormatter.dateFormat = "yyyyMMdd_HHmmss"
+            let timestamp = timestampFormatter.string(from: Date())
+            let exportedAt = ISO8601DateFormatter().string(from: Date())
+
+            let exportHeader = """
+            RE4Mobile-iOS26 — Complete External Relocation Audit
+            Exported at: \(exportedAt)
+            Architecture: \(image.architectureName)
+            External relocation records declared: \(recordCount)
+            Report encoding: UTF-8
+            Safety: read-only inventory; no relocation applied, no pointer changed, no guest instruction executed.
+
+            ============================================================
+            COMPLETE AUDIT REPORT
+            ============================================================
+
+            """
+            let completeReport = exportHeader + report + "\n"
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RE4_External_Relocation_Audit_\(recordCount)_\(timestamp).txt")
+            try Data(completeReport.utf8).write(to: outputURL, options: .atomic)
+
+            let detailCount = report
+                .components(separatedBy: "\n")
+                .filter { $0.hasPrefix("#") }
+                .count
+            machOLegacyRelocationExportMessage = "匯出完成：\(recordCount) 筆 relocation；明細列辨識數：\(detailCount)；\(completeReport.utf8.count) bytes。請在分享面板選擇「儲存到檔案」。"
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            machOLegacyRelocationExportMessage = "匯出失敗：\(error.localizedDescription)"
         }
     }
 
@@ -757,6 +823,7 @@ private enum PreviewSheet: Identifiable {
     case machOImporter
     case machOLoadImporter
     case sharePNG(URL)
+    case shareTextReport(URL)
 
     var id: String {
         switch self {
@@ -764,6 +831,7 @@ private enum PreviewSheet: Identifiable {
         case .machOImporter: return "macho-importer"
         case .machOLoadImporter: return "macho-load-importer"
         case .sharePNG(let url): return "share-\(url.lastPathComponent)"
+        case .shareTextReport(let url): return "share-report-\(url.lastPathComponent)"
         }
     }
 }
