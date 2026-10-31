@@ -20,6 +20,8 @@ enum MachO32ParserTest {
             print(try RE4MachO32LegacyDyldAudit.runSyntheticSelfTest())
             print("")
             print(try RE4MachO32LegacyRelocationAudit.runSyntheticSelfTest())
+            print("")
+            print(try RE4ExternalRelocationStager.runOverlayFormatSelfTest())
         } catch {
             fputs("FAIL: \(error.localizedDescription)\n", stderr)
             exit(1)
