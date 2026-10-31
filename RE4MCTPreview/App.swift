@@ -654,7 +654,10 @@ struct ContentView: View {
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .sharedCacheImporter:
-                MCTDocumentPicker(asCopy: false) { result in
+                // The dyld cache is extensionless on some Files providers. Use the
+                // broad public.item type and copy-import mode, which is already proven
+                // by the working MCT importer on this device.
+                MCTDocumentPicker(contentTypes: [.item], asCopy: true) { result in
                     activeSheet = nil
                     switch result {
                     case .picked(let url):
