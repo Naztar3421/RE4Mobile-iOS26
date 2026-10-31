@@ -415,7 +415,7 @@ public extension RE4GuestARMv6Memory {
             throw RE4GuestRuntimeError.invalidMemoryRegion("dense low-memory compatibility")
         }
         try memory.setProtectionRange(
-            address: 0x1000, length: 0x1000, protection: [.read, .execute]
+            address: 0x1000, length: 0x2000, protection: [.read, .execute]
         )
         guard try memory.readInstruction32(0x1000) == 0 else {
             throw RE4GuestRuntimeError.invalidMemoryRegion("dense execute permission")
