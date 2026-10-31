@@ -653,6 +653,19 @@ struct ContentView: View {
         }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
+            case .sharedCacheImporter:
+                MCTDocumentPicker(asCopy: false) { result in
+                    activeSheet = nil
+                    switch result {
+                    case .picked(let url):
+                        mountSharedCache(from: url)
+                    case .failed(let message):
+                        sharedCacheMountReportMessage = "Shared cache 檔案選取失敗：\\(message)"
+                    case .cancelled:
+                        sharedCacheMountReportMessage = "已取消選取 shared cache，尚未修改 Guest Memory。"
+                    }
+                }
+                .ignoresSafeArea()
             case .machOLoadImporter:
                 MCTDocumentPicker { result in
                     activeSheet = nil
@@ -890,6 +903,7 @@ struct ContentView: View {
 
 private enum PreviewSheet: Identifiable {
     case importer
+    case sharedCacheImporter
     case machOImporter
     case machOLoadImporter
     case sharePNG(URL)
@@ -898,6 +912,7 @@ private enum PreviewSheet: Identifiable {
     var id: String {
         switch self {
         case .importer: return "importer"
+        case .sharedCacheImporter: return "shared-cache-importer"
         case .machOImporter: return "macho-importer"
         case .machOLoadImporter: return "macho-load-importer"
         case .sharePNG(let url): return "share-\(url.lastPathComponent)"
