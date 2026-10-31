@@ -47,6 +47,11 @@ struct ContentView: View {
     @State private var loadedHLEDispatcher: RE4GuestARMv6HLEDispatcher?
     @State private var loadedMachOImage: RE4MachO32Image?
     @State private var mappedMachOMemory: RE4GuestARMv6Memory?
+    @State private var sparseMemorySelfTestMessage = ""
+    @State private var showSharedCacheImporter = false
+    @State private var sharedCacheMountReportMessage = ""
+    @State private var sharedCacheBackingData: Data?
+    @State private var sharedCacheSecurityScopedURL: URL?
 
     var body: some View {
         ScrollView {
@@ -135,14 +140,45 @@ struct ContentView: View {
 
             Button {
                 do {
-                    armv6SelfTestMessage = try RE4GuestARMv6Core.runSelfTest()
+                    sparseMemorySelfTestMessage = try RE4GuestARMv6Memory.runSparseRegionSelfTest()
                 } catch {
-                    armv6SelfTestMessage = "ARMv6 core self-test FAIL\n\(error.localizedDescription)"
+                    sparseMemorySelfTestMessage = "Sparse Guest Memory self-test FAIL\n\(error.localizedDescription)"
                 }
             } label: {
-                Label("ARMv6 核心指令自測", systemImage: "cpu")
+                Label("Sparse Guest Memory／R-W-X 權限自測", systemImage: "memorychip")
             }
             .buttonStyle(.borderedProminent)
+
+            if !sparseMemorySelfTestMessage.isEmpty {
+                Text(sparseMemorySelfTestMessage)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(sparseMemorySelfTestMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                showSharedCacheImporter = true
+            } label: {
+                Label("掛載 iOS 4.2.1 ARMv6 shared cache（slide=0）", systemImage: "externaldrive.badge.plus")
+            }
+            .buttonStyle(.bordered)
+            .fileImporter(isPresented: $showSharedCacheImporter, allowedContentTypes: [.data]) { result in
+                switch result {
+                case .success(let url):
+                    mountSharedCache(from: url)
+                case .failure(let error):
+                    sharedCacheMountReportMessage = "Shared cache 檔案選取失敗：\(error.localizedDescription)"
+                }
+            }
+
+            if !sharedCacheMountReportMessage.isEmpty {
+                Text(sharedCacheMountReportMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(sharedCacheMountReportMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
 
             if !armv6SelfTestMessage.isEmpty {
                 Text(armv6SelfTestMessage)
@@ -647,9 +683,16 @@ struct ContentView: View {
                             machOPointerFixupAuditMessage = ""
                             let guestMemory = RE4GuestARMv6Memory(size: 0x05000000)
                             let mapResult = try RE4MachO32Loader.map(image, into: guestMemory)
+                            var combinedMapReport = mapResult.report
+                            if let cacheData = sharedCacheBackingData {
+                                let cacheResult = try RE4IOS421SharedCacheMapper.mount(
+                                    data: cacheData, into: guestMemory, slide: 0
+                                )
+                                combinedMapReport += "\n\n" + cacheResult.report
+                            }
                             loadedMachOImage = image
                             mappedMachOMemory = guestMemory
-                            machOMapReportMessage = "檔案：\(url.lastPathComponent)\n\(mapResult.report)"
+                            machOMapReportMessage = "檔案：\(url.lastPathComponent)\n\(combinedMapReport)"
                         } catch {
                             machOMapReportMessage = "Mach-O segment mapping 失敗：\(url.lastPathComponent)\n\(error.localizedDescription)\n請選取 IPA 解壓後 .app 內的主執行檔，不是 IPA ZIP。"
                         }
@@ -723,6 +766,31 @@ struct ContentView: View {
             case .shareTextReport(let url):
                 PreviewActivityView(activityItems: [url])
             }
+        }
+    }
+
+    private func mountSharedCache(from url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        do {
+            let cacheData = try Data(contentsOf: url, options: .mappedIfSafe)
+            let targetMemory = mappedMachOMemory ?? RE4GuestARMv6Memory(size: 0x05000000)
+            guard !targetMemory.hasSparseRegion(named: "iOS421_SHARED_CACHE_TEXT_RX") else {
+                throw RE4IOS421SharedCacheMapperError.headerMismatch
+            }
+            let result = try RE4IOS421SharedCacheMapper.mount(
+                data: cacheData, into: targetMemory, slide: 0
+            )
+
+            if let previousURL = sharedCacheSecurityScopedURL, previousURL != url {
+                previousURL.stopAccessingSecurityScopedResource()
+            }
+            sharedCacheBackingData = cacheData
+            sharedCacheSecurityScopedURL = accessed ? url : nil
+            mappedMachOMemory = targetMemory
+            sharedCacheMountReportMessage = result.report
+        } catch {
+            if accessed { url.stopAccessingSecurityScopedResource() }
+            sharedCacheMountReportMessage = "Shared cache mount FAIL\n\(error.localizedDescription)"
         }
     }
 
