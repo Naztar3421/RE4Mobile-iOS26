@@ -1058,7 +1058,7 @@ struct ContentView: View {
         }
     }
 
-    private func exportExternalRelocationApplyCSV() {    private func startStageHImportBinding(from url: URL) {
+    private func startStageHImportBinding(from url: URL) {
         guard let image = loadedMachOImage,
               let stageGMemory = stagedRelocatedMemory,
               let cacheData = sharedCacheBackingData,
@@ -1127,7 +1127,7 @@ struct ContentView: View {
         }
     }
 
-
+    private func exportExternalRelocationApplyCSV() {
         guard !externalRelocationApplyCSV.isEmpty else { return }
         do {
             let outputURL = FileManager.default.temporaryDirectory
