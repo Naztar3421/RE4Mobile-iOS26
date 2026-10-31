@@ -11,12 +11,18 @@ enum MCTDocumentPickerResult {
 /// A direct UIDocumentPicker wrapper using public.data and copy-import mode.
 /// The app validates the .mct extension after the user confirms the selection.
 struct MCTDocumentPicker: UIViewControllerRepresentable {
+    let asCopy: Bool
     let onPick: (MCTDocumentPickerResult) -> Void
+
+    init(asCopy: Bool = true, onPick: @escaping (MCTDocumentPickerResult) -> Void) {
+        self.asCopy = asCopy
+        self.onPick = onPick
+    }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(
             forOpeningContentTypes: [.data],
-            asCopy: true
+            asCopy: asCopy
         )
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
