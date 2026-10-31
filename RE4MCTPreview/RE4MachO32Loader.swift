@@ -5,6 +5,8 @@ public protocol RE4GuestMemoryMapping: AnyObject {
     func copyBytes(at guestAddress: UInt32, count: Int) throws -> Data
     func writeBytes(at guestAddress: UInt32, data: Data) throws
     func zeroBytes(at guestAddress: UInt32, count: Int) throws
+    func setProtectionRange(address: UInt32, length: UInt64,
+                            protection: RE4GuestMemoryProtection, name: String) throws
 }
 public enum RE4MachO32LoaderError: Error, LocalizedError {
     case noEntryPoint, entryPointNotExecutable(UInt32)
@@ -103,6 +105,17 @@ public enum RE4MachO32Loader {
                 fileSize:s.fileSize,zeroFillBytes:tail,initialProtection:s.initialProtection
             ))
         }
+
+        // Enforce initial Mach-O segment protections only after all loader writes are complete.
+        for s in plan.segments {
+            try memory.setProtectionRange(
+                address: s.vmAddress,
+                length: UInt64(s.vmSize),
+                protection: RE4GuestMemoryProtection(rawValue: s.initialProtection),
+                name: "MachO:\(s.name)"
+            )
+        }
+
         return RE4MachO32MapResult(
             architectureName:image.architectureName,entryPoint:pc,segments:mapped,
             requiredMemorySize:plan.requiredMemorySize,fileBytesCopied:copied,zeroFillBytes:zeroed,
@@ -163,5 +176,12 @@ private final class RE4MachO32MapperTestMemory: RE4GuestMemoryMapping {
             throw RE4MachO32Error.syntheticSelfTestFailed("test zero out of bounds")
         }
         for i in Int(address)..<(Int(address)+count){bytes[i]=0}
+    }
+    func setProtectionRange(address:UInt32,length:UInt64,
+                            protection:RE4GuestMemoryProtection,name:String)throws {
+        guard length > 0, UInt64(address) + length <= UInt64(size),
+              !(protection.contains(.write) && protection.contains(.execute)) else {
+            throw RE4MachO32Error.syntheticSelfTestFailed("invalid test protection range")
+        }
     }
 }
