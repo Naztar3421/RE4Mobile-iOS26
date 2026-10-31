@@ -2,6 +2,10 @@ import Foundation
 
 public enum RE4GuestRuntimeError: Error, LocalizedError {
     case invalidMemoryRange(address: UInt32, count: Int)
+    case memoryProtectionViolation(address: UInt32, count: Int, access: String, region: String)
+    case invalidMemoryRegion(String)
+    case overlappingMemoryRegion(String, String)
+    case writeExecuteRegionDenied(String)
     case heapExhausted
     case invalidRegister(Int)
     case unsupportedInstruction(pc: UInt32, word: UInt32)
@@ -12,6 +16,14 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
         switch self {
         case .invalidMemoryRange(let address, let count):
             return String(format: "Guest memory range 0x%08X (+%d) is outside mapped guest memory.", address, count)
+        case .memoryProtectionViolation(let address, let count, let access, let region):
+            return String(format: "Guest memory %@ access at 0x%08X (+%d) is denied by region %@.", access, address, count, region)
+        case .invalidMemoryRegion(let reason):
+            return "Invalid Guest Memory region: \(reason)."
+        case .overlappingMemoryRegion(let first, let second):
+            return "Guest Memory regions overlap: \(first) and \(second)."
+        case .writeExecuteRegionDenied(let name):
+            return "Guest Memory region \(name) requests writable and executable permissions (W^X denied)."
         case .heapExhausted: return "Guest heap exhausted."
         case .invalidRegister(let index): return "Invalid ARM register index \(index)."
         case .unsupportedInstruction(let pc, let word):
@@ -24,14 +36,29 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
     }
 }
 
-/// Bounds-checked, little-endian 32-bit guest address space.
-/// All address access is copied through this object; it never returns host pointers.
+/// Bounds-checked low Guest VA plus independently mounted sparse regions.
+/// The original low [0, size) byte array remains the allocator/HLE/Res4 compatibility range.
 public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMapping {
     public let size: Int
     public let stackTop: UInt32
     public let returnSentinel: UInt32
     private var bytes: [UInt8]
     private var heapCursor: UInt32
+    private var sparseRegions: [RE4GuestMemoryRegion] = []
+
+    private struct DenseProtectionRange {
+        let start: UInt64
+        let end: UInt64
+        let protection: RE4GuestMemoryProtection
+        let name: String
+    }
+
+    private var denseProtectionRanges: [DenseProtectionRange] = []
+
+    private enum ResolvedAddress {
+        case dense(Range<Int>)
+        case sparse(RE4GuestMemoryRegion, backingOffset: UInt64)
+    }
 
     public init(size: Int = 0x05000000,
                 heapBase: UInt32 = 0x03100000,
@@ -45,75 +72,231 @@ public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMap
         self.bytes = [UInt8](repeating: 0, count: size)
     }
 
-    private func checkedRange(_ address: UInt32, _ count: Int) throws -> Range<Int> {
+    public var sparseRegionCount: Int { sparseRegions.count }
+    public var mountedSparseRegions: [RE4GuestMemoryRegion] { sparseRegions }
+
+    public func hasSparseRegion(named name: String) -> Bool {
+        sparseRegions.contains { $0.name == name }
+    }
+
+    private func resolve(
+        _ address: UInt32,
+        count: Int,
+        required: RE4GuestMemoryProtection
+    ) throws -> ResolvedAddress {
         guard count >= 0 else {
             throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
         }
+
         let start = UInt64(address)
-        let end = start + UInt64(count)
-        guard end >= start, end <= UInt64(size) else {
+        let (end, overflow) = start.addingReportingOverflow(UInt64(count))
+        guard !overflow, end <= (UInt64(UInt32.max) + 1) else {
             throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
         }
-        return Int(start)..<Int(end)
+
+        if end <= UInt64(size) && (start < UInt64(size) || count == 0) {
+            if let protected = denseProtectionRanges.first(where: {
+                start < $0.end && end > $0.start ||
+                (count == 0 && start >= $0.start && start < $0.end)
+            }) {
+                guard start >= protected.start && end <= protected.end else {
+                    throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
+                }
+                guard protected.protection.contains(required) else {
+                    throw RE4GuestRuntimeError.memoryProtectionViolation(
+                        address: address, count: count,
+                        access: required.label, region: protected.name
+                    )
+                }
+            }
+            return .dense(Int(start)..<Int(end))
+        }
+
+        for region in sparseRegions {
+            let regionStart = UInt64(region.guestBase)
+            let regionEnd = region.guestEndExclusive
+            let contained = start >= regionStart && end <= regionEnd &&
+                (count > 0 ? start < regionEnd : start <= regionEnd)
+            guard contained else { continue }
+            guard region.initialProtection.contains(required) else {
+                throw RE4GuestRuntimeError.memoryProtectionViolation(
+                    address: address, count: count,
+                    access: required.label, region: region.name
+                )
+            }
+            return .sparse(region, backingOffset: region.backingOffset + start - regionStart)
+        }
+
+        throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
+    }
+
+    /// Adds a group atomically. Every region must be disjoint from dense memory and all existing/new regions.
+    public func mountRegions(_ newRegions: [RE4GuestMemoryRegion]) throws {
+        guard !newRegions.isEmpty else { return }
+        var candidate = sparseRegions + newRegions
+
+        for region in newRegions {
+            guard !region.name.isEmpty, region.length > 0 else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("empty name or zero length")
+            }
+            let start = UInt64(region.guestBase)
+            let end = region.guestEndExclusive
+            guard end > start, end <= UInt64(UInt32.max) + 1 else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("Guest VA overflow in \(region.name)")
+            }
+            guard start >= UInt64(size) else {
+                throw RE4GuestRuntimeError.overlappingMemoryRegion("dense low memory", region.name)
+            }
+            guard region.backingEndExclusive >= region.backingOffset,
+                  region.backingEndExclusive <= UInt64(region.backing.byteCount) else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("backing range exceeds source data in \(region.name)")
+            }
+            guard region.initialProtection.isSubset(of: region.maxProtection) else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("initial protection exceeds max protection in \(region.name)")
+            }
+            guard !(region.initialProtection.contains(.write) && region.initialProtection.contains(.execute)) else {
+                throw RE4GuestRuntimeError.writeExecuteRegionDenied(region.name)
+            }
+        }
+
+        candidate.sort { $0.guestBase < $1.guestBase }
+        for index in 1..<candidate.count {
+            if candidate[index - 1].guestEndExclusive > UInt64(candidate[index].guestBase) {
+                throw RE4GuestRuntimeError.overlappingMemoryRegion(
+                    candidate[index - 1].name, candidate[index].name
+                )
+            }
+        }
+        sparseRegions = candidate
+    }
+
+    public func mountRegion(_ region: RE4GuestMemoryRegion) throws {
+        try mountRegions([region])
+    }
+
+    @discardableResult
+    public func unmountSparseRegion(named name: String) -> Bool {
+        let oldCount = sparseRegions.count
+        sparseRegions.removeAll { $0.name == name }
+        return sparseRegions.count != oldCount
+    }
+
+    /// Applies initial R/W/X permissions to a range in the legacy dense Guest VA.
+    /// Used by the Mach-O segment mapper after all file bytes and zero-fill bytes are installed.
+    public func setProtectionRange(
+        address: UInt32,
+        length: UInt64,
+        protection: RE4GuestMemoryProtection,
+        name: String = "dense-segment"
+    ) throws {
+        let start = UInt64(address)
+        let end = start + length
+        guard length > 0, end > start, end <= UInt64(size) else {
+            throw RE4GuestRuntimeError.invalidMemoryRegion("dense protection range is outside low Guest Memory")
+        }
+        guard !(protection.contains(.write) && protection.contains(.execute)) else {
+            throw RE4GuestRuntimeError.writeExecuteRegionDenied(name)
+        }
+        if let overlap = denseProtectionRanges.first(where: {
+            start < $0.end && end > $0.start
+        }) {
+            throw RE4GuestRuntimeError.overlappingMemoryRegion(overlap.name, name)
+        }
+        denseProtectionRanges.append(DenseProtectionRange(
+            start: start, end: end, protection: protection, name: name
+        ))
+        denseProtectionRanges.sort { $0.start < $1.start }
     }
 
     public func copyBytes(at guestAddress: UInt32, count: Int) throws -> Data {
-        let range = try checkedRange(guestAddress, count)
-        return Data(bytes[range])
+        switch try resolve(guestAddress, count: count, required: .read) {
+        case .dense(let range):
+            return Data(bytes[range])
+        case .sparse(let region, let backingOffset):
+            return try region.backing.copyBytes(at: backingOffset, count: count)
+        }
     }
 
     public func writeBytes(at guestAddress: UInt32, data: Data) throws {
-        let range = try checkedRange(guestAddress, data.count)
-        bytes.replaceSubrange(range, with: data)
+        switch try resolve(guestAddress, count: data.count, required: .write) {
+        case .dense(let range):
+            bytes.replaceSubrange(range, with: data)
+        case .sparse(let region, let backingOffset):
+            try region.backing.writeBytes(at: backingOffset, data: data)
+        }
     }
 
     public func zeroBytes(at guestAddress: UInt32, count: Int) throws {
-        let range = try checkedRange(guestAddress, count)
-        for index in range { bytes[index] = 0 }
+        guard count >= 0 else {
+            throw RE4GuestRuntimeError.invalidMemoryRange(address: guestAddress, count: count)
+        }
+        try writeBytes(at: guestAddress, data: Data(repeating: 0, count: count))
+    }
+
+    private func readInteger(_ address: UInt32, byteCount: Int, required: RE4GuestMemoryProtection) throws -> UInt32 {
+        switch try resolve(address, count: byteCount, required: required) {
+        case .dense(let range):
+            let p = range.lowerBound
+            if byteCount == 1 { return UInt32(bytes[p]) }
+            if byteCount == 2 {
+                return UInt32(bytes[p]) | (UInt32(bytes[p + 1]) << 8)
+            }
+            return UInt32(bytes[p]) | (UInt32(bytes[p + 1]) << 8) |
+                (UInt32(bytes[p + 2]) << 16) | (UInt32(bytes[p + 3]) << 24)
+        case .sparse(let region, let backingOffset):
+            let raw = [UInt8](try region.backing.copyBytes(at: backingOffset, count: byteCount))
+            if byteCount == 1 { return UInt32(raw[0]) }
+            if byteCount == 2 { return UInt32(raw[0]) | (UInt32(raw[1]) << 8) }
+            return UInt32(raw[0]) | (UInt32(raw[1]) << 8) |
+                (UInt32(raw[2]) << 16) | (UInt32(raw[3]) << 24)
+        }
     }
 
     public func read8(_ address: UInt32) throws -> UInt8 {
-        let r = try checkedRange(address, 1)
-        return bytes[r.lowerBound]
+        UInt8(try readInteger(address, byteCount: 1, required: .read))
     }
 
     public func read16(_ address: UInt32) throws -> UInt16 {
-        let r = try checkedRange(address, 2), p = r.lowerBound
-        return UInt16(bytes[p]) | (UInt16(bytes[p + 1]) << 8)
+        UInt16(try readInteger(address, byteCount: 2, required: .read))
     }
 
     public func read32(_ address: UInt32) throws -> UInt32 {
-        let r = try checkedRange(address, 4), p = r.lowerBound
-        return UInt32(bytes[p]) | (UInt32(bytes[p + 1]) << 8) |
-               (UInt32(bytes[p + 2]) << 16) | (UInt32(bytes[p + 3]) << 24)
+        try readInteger(address, byteCount: 4, required: .read)
+    }
+
+    /// Instruction fetch is distinct from data read and requires execute permission.
+    public func readInstruction32(_ address: UInt32) throws -> UInt32 {
+        try readInteger(address, byteCount: 4, required: .execute)
     }
 
     public func write8(_ address: UInt32, _ value: UInt8) throws {
-        let r = try checkedRange(address, 1)
-        bytes[r.lowerBound] = value
+        try writeBytes(at: address, data: Data([value]))
     }
 
     public func write16(_ address: UInt32, _ value: UInt16) throws {
-        let r = try checkedRange(address, 2), p = r.lowerBound
-        bytes[p] = UInt8(value & 0xFF)
-        bytes[p + 1] = UInt8((value >> 8) & 0xFF)
+        try writeBytes(at: address, data: Data([
+            UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF)
+        ]))
     }
 
     public func write32(_ address: UInt32, _ value: UInt32) throws {
-        let r = try checkedRange(address, 4), p = r.lowerBound
-        bytes[p] = UInt8(value & 0xFF)
-        bytes[p + 1] = UInt8((value >> 8) & 0xFF)
-        bytes[p + 2] = UInt8((value >> 16) & 0xFF)
-        bytes[p + 3] = UInt8((value >> 24) & 0xFF)
+        try writeBytes(at: address, data: Data([
+            UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF),
+            UInt8((value >> 16) & 0xFF), UInt8((value >> 24) & 0xFF)
+        ]))
     }
 
     public func readCString(_ address: UInt32, limit: Int = 8192) throws -> String {
-        guard limit >= 0 else { throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit) }
+        guard limit >= 0 else {
+            throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit)
+        }
         var output: [UInt8] = []
         output.reserveCapacity(min(limit, 256))
         for offset in 0..<limit {
             let (at, overflow) = address.addingReportingOverflow(UInt32(offset))
-            guard !overflow else { throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit) }
+            guard !overflow else {
+                throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit)
+            }
             let byte = try read8(at)
             if byte == 0 { return String(decoding: output, as: UTF8.self) }
             output.append(byte)
@@ -491,7 +674,7 @@ public final class RE4GuestARMv6Core {
             steps += 1
             return true
         }
-        let word = try memory.read32(pc)
+        let word = try memory.readInstruction32(pc)
         registers[15] = pc &+ 4
         steps += 1
         if !conditionPassed(word >> 28) { return true }
