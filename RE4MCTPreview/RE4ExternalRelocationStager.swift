@@ -32,6 +32,8 @@ public enum RE4ExternalRelocationStager {
         public let report: String
         public let auditCSV: String
         public let stagingMemory: RE4GuestARMv6Memory
+        /// Exact target VAs already relocated in the isolated Stage G image.
+        public let relocationTargetAddresses: [UInt32]
     }
 
     private enum StagerError: Error, LocalizedError {
@@ -428,7 +430,8 @@ public enum RE4ExternalRelocationStager {
         return ApplyResult(
             report: report,
             auditCSV: auditCSV,
-            stagingMemory: stagingMemory
+            stagingMemory: stagingMemory,
+            relocationTargetAddresses: records.map(\.targetVA)
         )
     }
 
