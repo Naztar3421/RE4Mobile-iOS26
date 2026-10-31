@@ -52,6 +52,10 @@ struct ContentView: View {
     @State private var sharedCacheMountReportMessage = ""
     @State private var sharedCacheBackingData: Data?
     @State private var sharedCacheSecurityScopedURL: URL?
+    @State private var isApplyingExternalRelocations = false
+    @State private var externalRelocationApplyMessage = ""
+    @State private var externalRelocationApplyCSV = ""
+    @State private var stagedRelocatedMemory: RE4GuestARMv6Memory?
 
     var body: some View {
         ScrollView {
@@ -241,6 +245,47 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
+            }
+
+            Button {
+                activeSheet = .externalRelocationImporter
+            } label: {
+                Label(
+                    isApplyingExternalRelocations
+                        ? "Stage G：正在隔離套用 1,943 筆 relocation…"
+                        : "Stage G：預檢並隔離套用 1,943 筆 external relocation",
+                    systemImage: isApplyingExternalRelocations ? "hourglass" : "arrow.triangle.2.circlepath"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                isApplyingExternalRelocations ||
+                loadedMachOImage == nil ||
+                mappedMachOMemory == nil ||
+                sharedCacheBackingData == nil
+            )
+
+            if isApplyingExternalRelocations {
+                ProgressView("正在核對原始記憶體、驗證候選 cache 位址，並建立獨立 staging memory…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.caption)
+            }
+
+            if !externalRelocationApplyMessage.isEmpty {
+                Text(externalRelocationApplyMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(externalRelocationApplyMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            if !externalRelocationApplyCSV.isEmpty {
+                Button {
+                    exportExternalRelocationApplyCSV()
+                } label: {
+                    Label("匯出 1,943 筆 relocation staging read-back CSV", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
             }
 
             Button {
@@ -669,6 +714,19 @@ struct ContentView: View {
                     }
                 }
                 .ignoresSafeArea()
+            case .externalRelocationImporter:
+                MCTDocumentPicker(contentTypes: [.item], asCopy: true) { result in
+                    activeSheet = nil
+                    switch result {
+                    case .picked(let url):
+                        startStageGExternalRelocationApply(from: url)
+                    case .failed(let message):
+                        externalRelocationApplyMessage = "Stage G 檔案選取失敗：\\(message)"
+                    case .cancelled:
+                        externalRelocationApplyMessage = "已取消 Stage G relocation overlay 選取；Guest Memory 未修改。"
+                    }
+                }
+                .ignoresSafeArea()
             case .machOLoadImporter:
                 MCTDocumentPicker { result in
                     activeSheet = nil
@@ -685,6 +743,9 @@ struct ContentView: View {
                             let image = try RE4MachO32Parser.parse(binary)
                             mappedMachOMemory = nil
                             loadedMachOImage = nil
+                            stagedRelocatedMemory = nil
+                            externalRelocationApplyMessage = ""
+                            externalRelocationApplyCSV = ""
                             loadedHLEBindingResult = nil
                             loadedHLEDispatcher = nil
                             machOHLEBindingReportMessage = ""
@@ -848,6 +909,9 @@ struct ContentView: View {
                     sharedCacheBackingData = cacheData
                     sharedCacheSecurityScopedURL = accessed ? url : nil
                     mappedMachOMemory = targetMemory
+                    stagedRelocatedMemory = nil
+                    externalRelocationApplyMessage = ""
+                    externalRelocationApplyCSV = ""
                     sharedCacheMountReportMessage = result.report
                     isMountingSharedCache = false
                 }
@@ -859,6 +923,73 @@ struct ContentView: View {
                     isMountingSharedCache = false
                 }
             }
+        }
+    }
+
+    private func startStageGExternalRelocationApply(from url: URL) {
+        guard let image = loadedMachOImage,
+              let originalMemory = mappedMachOMemory,
+              let cacheData = sharedCacheBackingData else {
+            externalRelocationApplyMessage =
+                "Stage G blocked：請先掛載 8C148 shared cache，並載入 Res4 至同一個 Guest Memory。"
+            return
+        }
+
+        do {
+            let overlayData = try Data(contentsOf: url, options: .mappedIfSafe)
+            guard overlayData.count == 1_943 * 16 else {
+                throw NSError(
+                    domain: "RE4ExternalRelocationStager",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "overlay 檔案大小應為 31,088 bytes，實際為 \\(overlayData.count)。"]
+                )
+            }
+
+            isApplyingExternalRelocations = true
+            externalRelocationApplyMessage =
+                "已選取：\\(url.lastPathComponent)\\n正在驗證 Stage D overlay、原始 Res4 記憶體與 shared-cache 位址…"
+            externalRelocationApplyCSV = ""
+            stagedRelocatedMemory = nil
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let result = try RE4ExternalRelocationStager.applyInIsolatedStaging(
+                        image: image,
+                        cacheData: cacheData,
+                        originalMemory: originalMemory,
+                        overlayData: overlayData
+                    )
+                    DispatchQueue.main.async {
+                        stagedRelocatedMemory = result.stagingMemory
+                        externalRelocationApplyMessage = result.report
+                        externalRelocationApplyCSV = result.auditCSV
+                        isApplyingExternalRelocations = false
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        stagedRelocatedMemory = nil
+                        externalRelocationApplyMessage =
+                            "Stage G external relocation apply FAIL\\n\\(error.localizedDescription)\\n原始 Guest Memory 未被此流程寫入。"
+                        externalRelocationApplyCSV = ""
+                        isApplyingExternalRelocations = false
+                    }
+                }
+            }
+        } catch {
+            externalRelocationApplyMessage =
+                "Stage G overlay 讀取失敗：\\(url.lastPathComponent)\\n\\(error.localizedDescription)"
+        }
+    }
+
+    private func exportExternalRelocationApplyCSV() {
+        guard !externalRelocationApplyCSV.isEmpty else { return }
+        do {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RE4_StageG_External_Relocation_Readback_1943.csv")
+            try Data(externalRelocationApplyCSV.utf8).write(to: outputURL, options: .atomic)
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            externalRelocationApplyMessage += "\\nCSV export failed: \\(error.localizedDescription)"
         }
     }
 
@@ -957,6 +1088,7 @@ struct ContentView: View {
 private enum PreviewSheet: Identifiable {
     case importer
     case sharedCacheImporter
+    case externalRelocationImporter
     case machOImporter
     case machOLoadImporter
     case sharePNG(URL)
@@ -966,6 +1098,7 @@ private enum PreviewSheet: Identifiable {
         switch self {
         case .importer: return "importer"
         case .sharedCacheImporter: return "shared-cache-importer"
+        case .externalRelocationImporter: return "external-relocation-importer"
         case .machOImporter: return "macho-importer"
         case .machOLoadImporter: return "macho-load-importer"
         case .sharePNG(let url): return "share-\(url.lastPathComponent)"
