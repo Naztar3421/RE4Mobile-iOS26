@@ -65,8 +65,8 @@ public struct RE4MachO32MapResult {
     }
 }
 
-/// Maps the validated segment VM ranges at their declared addresses; skips __PAGEZERO.
-/// Protections are reported but not enforced; this does not apply relocations/binds or execute code.
+/// Maps validated segment VM ranges at their declared addresses; skips __PAGEZERO.
+/// Applies initial R/W/X protection ranges after mapping; does not apply relocations/binds or execute code.
 public enum RE4MachO32Loader {
     public static func map(_ image: RE4MachO32Image, into memory: RE4GuestMemoryMapping) throws -> RE4MachO32MapResult {
         let plan = try image.makeLoadPlan(guestMemorySize: memory.size)
