@@ -105,6 +105,10 @@ public struct RE4MachO32Relocation {
 
 public struct RE4MachO32IndirectImport {
     public let symbolName: String
+    /// Exact nlist index selected by the LC_DYSYMTAB indirect-symbol table.
+    public let symbolIndex: UInt32
+    /// Absolute index into the LC_DYSYMTAB indirect-symbol table.
+    public let indirectTableIndex: UInt32
     public let sectionName: String
     public let slotAddress: UInt32
     public let isStub: Bool
@@ -583,7 +587,8 @@ public enum RE4MachO32Parser {
                         guard symbol.isUndefined, !symbol.name.isEmpty else { continue }
                         guard symbol.isExternal else { continue }
                         indirectImports.append(RE4MachO32IndirectImport(
-                            symbolName: symbol.name, sectionName: section.name,
+                            symbolName: symbol.name, symbolIndex: symbolIndex,
+                            indirectTableIndex: UInt32(index), sectionName: section.name,
                             slotAddress: section.address &+ UInt32(slot * entrySize), isStub: isStub,
                             sectionType: section.type, entrySize: UInt32(entrySize)
                         ))
