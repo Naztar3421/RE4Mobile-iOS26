@@ -229,6 +229,7 @@ public enum RE4ExternalRelocationStager {
             )
         }
 
+        let sourceFileBytes = [UInt8](image.fileBytes)
         var textCandidateCount = 0
         var dataCandidateCount = 0
         var csvLines = [
@@ -252,7 +253,7 @@ public enum RE4ExternalRelocationStager {
             }
 
             let fileOffset = Int(record.thinFileOffset)
-            let sourceWord = readLE32([UInt8](image.fileBytes), fileOffset)
+            let sourceWord = readLE32(sourceFileBytes, fileOffset)
             guard sourceWord == record.originalWord else {
                 throw StagerError.recordFailure(
                     index: index + 1,
