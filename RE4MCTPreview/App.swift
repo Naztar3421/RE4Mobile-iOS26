@@ -48,7 +48,7 @@ struct ContentView: View {
     @State private var loadedMachOImage: RE4MachO32Image?
     @State private var mappedMachOMemory: RE4GuestARMv6Memory?
     @State private var sparseMemorySelfTestMessage = ""
-    @State private var showSharedCacheImporter = false
+    @State private var isMountingSharedCache = false
     @State private var sharedCacheMountReportMessage = ""
     @State private var sharedCacheBackingData: Data?
     @State private var sharedCacheSecurityScopedURL: URL?
@@ -158,18 +158,20 @@ struct ContentView: View {
             }
 
             Button {
-                showSharedCacheImporter = true
+                activeSheet = .sharedCacheImporter
             } label: {
-                Label("掛載 iOS 4.2.1 ARMv6 shared cache（slide=0）", systemImage: "externaldrive.badge.plus")
+                Label(
+                    isMountingSharedCache ? "正在驗證／掛載 shared cache…" : "掛載 iOS 4.2.1 ARMv6 shared cache（slide=0）",
+                    systemImage: isMountingSharedCache ? "hourglass" : "externaldrive.badge.plus"
+                )
             }
             .buttonStyle(.bordered)
-            .fileImporter(isPresented: $showSharedCacheImporter, allowedContentTypes: [.data]) { result in
-                switch result {
-                case .success(let url):
-                    mountSharedCache(from: url)
-                case .failure(let error):
-                    sharedCacheMountReportMessage = "Shared cache 檔案選取失敗：\(error.localizedDescription)"
-                }
+            .disabled(isMountingSharedCache)
+
+            if isMountingSharedCache {
+                ProgressView("正在讀取 166.7 MB cache、計算 SHA-256 並驗證 mapping…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.caption)
             }
 
             if !sharedCacheMountReportMessage.isEmpty {
