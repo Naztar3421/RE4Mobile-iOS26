@@ -784,28 +784,78 @@ struct ContentView: View {
         }
     }
 
-    private func mountSharedCache(from url: URL) {
-        let accessed = url.startAccessingSecurityScopedResource()
-        do {
-            let cacheData = try Data(contentsOf: url, options: .mappedIfSafe)
-            let targetMemory = mappedMachOMemory ?? RE4GuestARMv6Memory(size: 0x05000000)
-            guard !targetMemory.hasSparseRegion(named: "iOS421_SHARED_CACHE_TEXT_RX") else {
-                throw RE4IOS421SharedCacheMapperError.headerMismatch
-            }
-            let result = try RE4IOS421SharedCacheMapper.mount(
-                data: cacheData, into: targetMemory, slide: 0
-            )
+    private func readCoordinatedSharedCache(from url: URL) throws -> Data {
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        var readData: Data?
+        var readError: Error?
 
-            if let previousURL = sharedCacheSecurityScopedURL, previousURL != url {
-                previousURL.stopAccessingSecurityScopedResource()
+        coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { coordinatedURL in
+            do {
+                readData = try Data(contentsOf: coordinatedURL, options: .mappedIfSafe)
+            } catch {
+                readError = error
             }
-            sharedCacheBackingData = cacheData
-            sharedCacheSecurityScopedURL = accessed ? url : nil
-            mappedMachOMemory = targetMemory
-            sharedCacheMountReportMessage = result.report
-        } catch {
-            if accessed { url.stopAccessingSecurityScopedResource() }
-            sharedCacheMountReportMessage = "Shared cache mount FAIL\n\(error.localizedDescription)"
+        }
+
+        if let coordinationError { throw coordinationError }
+        if let readError { throw readError }
+        guard let readData else {
+            throw NSError(
+                domain: "RE4SharedCacheImporter",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Files provider 沒有交付可讀取的檔案。"]
+            )
+        }
+        return readData
+    }
+
+    private func mountSharedCache(from url: URL) {
+        guard !isMountingSharedCache else { return }
+
+        let accessed = url.startAccessingSecurityScopedResource()
+        let existingMemory = mappedMachOMemory
+        isMountingSharedCache = true
+        sharedCacheMountReportMessage =
+            "已選取：\\(url.lastPathComponent)\\n正在讀取檔案並驗證大小、SHA-256 和 8C148 mapping…"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                // Files providers may vend the document lazily; coordinate the read off the UI thread.
+                let cacheData = try readCoordinatedSharedCache(from: url)
+                let targetMemory = existingMemory ?? RE4GuestARMv6Memory(size: 0x05000000)
+
+                guard !targetMemory.hasSparseRegion(named: "iOS421_SHARED_CACHE_TEXT_RX") else {
+                    throw NSError(
+                        domain: "RE4SharedCacheImporter",
+                        code: 2,
+                        userInfo: [NSLocalizedDescriptionKey: "目前 Guest Memory 已掛載 8C148 shared cache。請重新載入 Res4 建立新的 Guest Memory 後，再掛載一次。"]
+                    )
+                }
+
+                // The 166 MB SHA-256 and all mapping checks run on this background queue.
+                let result = try RE4IOS421SharedCacheMapper.mount(
+                    data: cacheData, into: targetMemory, slide: 0
+                )
+
+                DispatchQueue.main.async {
+                    if let previousURL = sharedCacheSecurityScopedURL, previousURL != url {
+                        previousURL.stopAccessingSecurityScopedResource()
+                    }
+                    sharedCacheBackingData = cacheData
+                    sharedCacheSecurityScopedURL = accessed ? url : nil
+                    mappedMachOMemory = targetMemory
+                    sharedCacheMountReportMessage = result.report
+                    isMountingSharedCache = false
+                }
+            } catch {
+                if accessed { url.stopAccessingSecurityScopedResource() }
+                DispatchQueue.main.async {
+                    sharedCacheMountReportMessage =
+                        "Shared cache mount FAIL\\n檔案：\\(url.lastPathComponent)\\n\\(error.localizedDescription)"
+                    isMountingSharedCache = false
+                }
+            }
         }
     }
 
