@@ -610,7 +610,17 @@ public enum RE4ARMv6EntryPreflight {
         let fixture = try RE4MachO32Parser.makeSyntheticSelfTestFixture()
         let image = try RE4MachO32Parser.parse(fixture)
         let memory = RE4GuestARMv6Memory(size: 0x05000000)
-        _ = try RE4MachO32Loader.map(image, into: memory)
+        // This is a read-only static-analysis fixture, not a live Mach-O mapping.
+        // Copy file-backed bytes without installing runtime protections so the test can add
+        // additional synthetic instruction streams inside the fixture's __TEXT address range.
+        for segment in image.segments where !segment.isPageZero && segment.fileSize > 0 {
+            let start = Int(segment.fileOffset)
+            let count = Int(segment.fileSize)
+            try memory.loadBytes(
+                image.fileBytes.subdata(in: start..<(start + count)),
+                at: segment.vmAddress
+            )
+        }
         let report = try inspect(entryPoint: image.entryPoint!, image: image, memory: memory, instructionCount: 3)
         let targetReport = try inspectAddress(image.entryPoint!, label: "synthetic entry",
                                               image: image, memory: memory, maxInstructions: 3)

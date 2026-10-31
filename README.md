@@ -66,7 +66,7 @@ The on-device **Mach-O 32-bit ARM 解析器自測** uses a generated fixture (th
 
 ## Mach-O segment mapper — incremental milestone
 
-`RE4MachO32Loader.swift` maps validated segments at their declared guest virtual addresses, excludes `__PAGEZERO`, clears each full VM range, copies the file-backed prefix, and reports zero-fill bytes. It checks that the entry PC is within a mapped executable segment and refuses invalid memory/file ranges. Segment protections are reported, not enforced.
+`RE4MachO32Loader.swift` maps validated segments at their declared guest virtual addresses, excludes `__PAGEZERO`, clears each full VM range, copies the file-backed prefix, and reports zero-fill bytes. It checks that the entry PC is within a mapped executable segment and refuses invalid memory/file ranges. Initial per-segment R/W/X protections are enforced after segment bytes and zero-fill are installed.
 
 The on-device **Mach-O Segment Mapper 自測** uses a generated asset-free ARMv6 Mach-O fixture to verify `__TEXT`, `__DATA`, `__LINKEDIT` mapping, entry opcodes, zero-fill clearing, file offsets, and rejection when guest memory is too small. **載入 Mach-O 至 Guest Memory** accepts a raw main executable extracted from the app bundle, selects its 32-bit ARM slice and maps it into the 80 MiB guest address space, retaining image and memory for follow-on work. This step does not apply relocations/binds, resolve imports/HLE, run initializers, or execute guest code.
 
@@ -175,3 +175,44 @@ The relocation audit now emits the full sorted record list after its summaries a
 ## One-tap full relocation report export
 
 The relocation audit UI retains its on-screen summary and 25-record pages, and adds a one-tap export action. It regenerates the same read-only audit report and writes one UTF-8 `.txt` file containing export metadata, the entire audit summary, representative records, and the complete sorted relocation inventory. The native iOS share sheet is then presented so the user can save the single file to Files or share it. Export does not apply relocations, alter guest memory, or execute guest code. The report can be regenerated from a freshly loaded Mach-O to establish a clean analysis baseline.
+
+
+## Sparse Guest Memory and pinned iOS 4.2.1 shared cache
+
+The runtime memory model now keeps the original low Guest VA byte array (default 80 MiB) for Res4, heap, stack, return sentinel and existing HLE, and adds independently mounted sparse regions above that range. Sparse regions carry a Guest VA base, length, shared file backing, backing offset, maximum protection and initial protection.
+
+- Multiple regions can reference the same immutable `RE4GuestMemoryBacking`. Writes to writable regions are stored in 4 KiB shadow pages, so the source shared-cache Data is not modified and the DATA mapping does not require copying the entire cache into a second mutable buffer.
+- Data reads/writes and ARM instruction fetches are checked separately. Sparse R-X, R-W and R-only mappings enforce their permissions; writable+executable mappings, overlaps, unmapped gaps and cross-region accesses are rejected.
+- The Mach-O segment mapper applies each main-image segment's initial protection only after its file-backed bytes and zero-fill bytes have been installed. The legacy low memory outside protected Mach-O ranges remains permissive for the existing heap/HLE harness.
+- The pinned iOS 4.2.1 / Build 8C148 / ARMv6 shared-cache mapper validates the exact 166,722,970-byte file SHA-256, cache magic, three mapping-table records, slide metadata and code-signature tail before atomically mounting four sparse ranges: TEXT R-X, DATA R-W, LINKEDIT R-only and code-signature tail R-only.
+- The app exposes **Sparse Guest Memory／R-W-X 權限自測** and **掛載 iOS 4.2.1 ARMv6 shared cache（slide=0）**. Select the extracted `dyld_shared_cache_armv6` file from Files. The importer retains the security-scoped URL while the memory backing is in use.
+
+This milestone is deliberately pinned to **slide=0**. Non-zero slides are rejected until cache slide/fixup processing is implemented. Mounting the shared cache does not itself resolve the 357 indirect-import-only symbols, apply the 1,943 Res4 external relocations, run dyld initializers, register Objective-C/C++ runtime state, or execute guest code. It only makes the verified cache bytes addressable through the sparse Guest Memory API. The 21 dylib providers share one cache backing; the cache is not extracted into 21 duplicated images.
+
+## Stage G — isolated Res4 external-relocation staging
+
+The Stage G control accepts the pinned 31,088-byte Stage D overlay file `RE4_StageD_Relocation_Overlay_Records_LE.bin`. It verifies the overlay SHA-256, the selected Res4 ARMv6 thin-slice SHA-256, the iOS 4.2.1 / 8C148 shared-cache SHA-256, the exact Res4 segment layout, and every relocation's target/file-offset/addend/candidate address against the currently loaded Guest Memory.
+
+Only after all 1,943 live target words match their original on-disk values does it create a new minimal Guest Memory, remap Res4 and the immutable shared-cache backing, apply the relocation words there, and read all 1,943 values back. The final image and unchanged original image are checked against the pinned Stage D baseline and relocated SHA-256 values. The original loaded Guest Memory is never written by this procedure.
+
+To run it on-device:
+1. Mount the verified iOS 4.2.1 Build 8C148 ARMv6 shared cache.
+2. Load the matching Res4 executable into Guest Memory.
+3. Transfer the supplied Stage D overlay `.bin` file into Files and use **Stage G：預檢並隔離套用 1,943 筆 external relocation**.
+4. Select the overlay. On success, the report will show `Stage G isolated external relocation apply PASS`; the detailed 1,943-row read-back CSV can be exported from the app.
+
+This stage does not install the separate 357 indirect-import-only symbols, lazy binds, HLE, dyld initializers, Objective-C/C++ constructors, or execute guest instructions. The relocated image is retained separately as staging memory for the next validation step.
+
+## Stage H — isolated native indirect-import staging (42 non-lazy pointers)
+
+RE4IOS421ImportBindingStager.swift consumes the pinned 672-row Stage H import-site crosswalk CSV. The importer validates the file SHA-256 and 23-column schema, then cross-checks all 672 rows against the parsed Res4 LC_DYSYMTAB indirect-symbol table, nlist symbol indexes, indirect-table indexes, dylib ordinals/dependency paths, section/file offsets, provider cache mappings, cache permissions, and ARM Thumb-state bits. Stub/lazy-pointer pairs are checked by symbol index and embedded literal address.
+
+To run this step on-device:
+1. Complete Stage G successfully, retaining the isolated relocated image.
+2. Select the Stage H import-applier control in the app.
+3. Choose RE4_StageH_Import_Binding_DryRun_672.csv from the Stage H verification package.
+4. On success, export the 42-row non-lazy pointer readback CSV from the app.
+
+Stage H creates a second, fresh Guest Memory and remaps Res4 plus the pinned immutable shared-cache backing. It copies only Stage G's relocated __DATA segment into the new image, verifies the Stage G image hash, and writes exactly 42 candidate pointers into __DATA,__nl_symbol_ptr. The 315 lazy pointers remain 0x00008DD0; all 315 symbol stubs remain byte-for-byte unchanged. It reads back all 42 writes, verifies no byte changed outside those pointer slots, checks the expected final image hash, and rehashes the Stage G input to prove it remained unchanged.
+
+This is isolated native-pointer staging only. It does not modify the original loaded Guest Memory or Stage G memory, does not run the lazy-binding helper, does not execute guest instructions, does not invoke HLE, and does not run initializers or constructors. The staged image is not yet permission to start the game's entry point.

@@ -4,6 +4,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
+       "$ROOT/RE4MCTPreview/RE4GuestMemoryRegions.swift" \
        "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32Parser.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32Loader.swift" \
@@ -13,6 +14,8 @@ swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32PointerFixupAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32LegacyDyldAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32LegacyRelocationAudit.swift" \
+       "$ROOT/RE4MCTPreview/RE4ExternalRelocationStager.swift" \
+       "$ROOT/RE4MCTPreview/RE4IOS421ImportBindingStager.swift" \
        "$ROOT/tools/test-mach-o32.swift" \
        -o "$TMP/macho32-test"
 "$TMP/macho32-test"

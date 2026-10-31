@@ -3,6 +3,8 @@ import Foundation
 enum MachO32ParserTest {
     static func main() {
         do {
+            print(try RE4GuestARMv6Memory.runSparseRegionSelfTest())
+            print("")
             print(try RE4MachO32Parser.runSyntheticSelfTest())
             print("")
             print(try RE4MachO32Loader.runSyntheticSelfTest())
@@ -18,6 +20,10 @@ enum MachO32ParserTest {
             print(try RE4MachO32LegacyDyldAudit.runSyntheticSelfTest())
             print("")
             print(try RE4MachO32LegacyRelocationAudit.runSyntheticSelfTest())
+            print("")
+            print(try RE4ExternalRelocationStager.runOverlayFormatSelfTest())
+            print("")
+            print(try RE4IOS421ImportBindingStager.runSyntheticSelfTest())
         } catch {
             fputs("FAIL: \(error.localizedDescription)\n", stderr)
             exit(1)
