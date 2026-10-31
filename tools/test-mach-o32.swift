@@ -3,6 +3,8 @@ import Foundation
 enum MachO32ParserTest {
     static func main() {
         do {
+            print(try RE4GuestARMv6Memory.runSparseRegionSelfTest())
+            print("")
             print(try RE4MachO32Parser.runSyntheticSelfTest())
             print("")
             print(try RE4MachO32Loader.runSyntheticSelfTest())
