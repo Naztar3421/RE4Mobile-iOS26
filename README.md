@@ -203,3 +203,16 @@ To run it on-device:
 
 This stage does not install the separate 357 indirect-import-only symbols, lazy binds, HLE, dyld initializers, Objective-C/C++ constructors, or execute guest instructions. The relocated image is retained separately as staging memory for the next validation step.
 
+## Stage H — isolated native indirect-import staging (42 non-lazy pointers)
+
+RE4IOS421ImportBindingStager.swift consumes the pinned 672-row Stage H import-site crosswalk CSV. The importer validates the file SHA-256 and 23-column schema, then cross-checks all 672 rows against the parsed Res4 LC_DYSYMTAB indirect-symbol table, nlist symbol indexes, indirect-table indexes, dylib ordinals/dependency paths, section/file offsets, provider cache mappings, cache permissions, and ARM Thumb-state bits. Stub/lazy-pointer pairs are checked by symbol index and embedded literal address.
+
+To run this step on-device:
+1. Complete Stage G successfully, retaining the isolated relocated image.
+2. Select the Stage H import-applier control in the app.
+3. Choose RE4_StageH_Import_Binding_DryRun_672.csv from the Stage H verification package.
+4. On success, export the 42-row non-lazy pointer readback CSV from the app.
+
+Stage H creates a second, fresh Guest Memory and remaps Res4 plus the pinned immutable shared-cache backing. It copies only Stage G's relocated __DATA segment into the new image, verifies the Stage G image hash, and writes exactly 42 candidate pointers into __DATA,__nl_symbol_ptr. The 315 lazy pointers remain 0x00008DD0; all 315 symbol stubs remain byte-for-byte unchanged. It reads back all 42 writes, verifies no byte changed outside those pointer slots, checks the expected final image hash, and rehashes the Stage G input to prove it remained unchanged.
+
+This is isolated native-pointer staging only. It does not modify the original loaded Guest Memory or Stage G memory, does not run the lazy-binding helper, does not execute guest instructions, does not invoke HLE, and does not run initializers or constructors. The staged image is not yet permission to start the game's entry point.
