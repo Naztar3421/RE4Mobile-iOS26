@@ -130,6 +130,39 @@ public enum RE4ExternalRelocationStager {
         return records
     }
 
+    private static func snapshotMappedRes4(
+        _ memory: RE4GuestARMv6Memory,
+        image: RE4MachO32Image
+    ) throws -> Data {
+        let names: Set<String> = ["__TEXT", "__DATA", "__LINKEDIT"]
+        let segments = image.segments
+            .filter { names.contains($0.name) }
+            .sorted { $0.vmAddress < $1.vmAddress }
+        guard segments.count == 3 else {
+            throw StagerError.invalidPrerequisite("expected exactly three loadable Res4 segments for snapshot")
+        }
+
+        var snapshot = Data()
+        snapshot.reserveCapacity(imageByteCount)
+        var expectedNextVA = UInt64(baseVA)
+        for segment in segments {
+            guard UInt64(segment.vmAddress) == expectedNextVA else {
+                throw StagerError.invalidPrerequisite("Res4 segment snapshot encountered a VM gap or overlap")
+            }
+            // Read one protection range at a time. The Guest Memory API intentionally
+            // rejects a single read that spans differently protected dense segments.
+            snapshot.append(try memory.copyBytes(
+                at: segment.vmAddress,
+                count: Int(segment.vmSize)
+            ))
+            expectedNextVA = segment.vmEnd
+        }
+        guard expectedNextVA == UInt64(imageEndVA), snapshot.count == imageByteCount else {
+            throw StagerError.invalidPrerequisite("Res4 segment snapshot size/end does not match the pinned image")
+        }
+        return snapshot
+    }
+
     private static func requireSegment(
         _ image: RE4MachO32Image,
         name: String,
@@ -219,9 +252,7 @@ public enum RE4ExternalRelocationStager {
         )
 
         // Verify the caller's already-loaded memory before creating or writing staging memory.
-        let originalBaseline = try originalMemory.copyBytes(
-            at: baseVA, count: imageByteCount
-        )
+        let originalBaseline = try snapshotMappedRes4(originalMemory, image: image)
         let originalBaselineHash = sha256(originalBaseline)
         guard originalBaselineHash == expectedBaselineSHA256 else {
             throw StagerError.invalidPrerequisite(
@@ -302,7 +333,7 @@ public enum RE4ExternalRelocationStager {
             data: cacheData, into: stagingMemory, slide: 0
         )
 
-        let stagingBefore = try stagingMemory.copyBytes(at: baseVA, count: imageByteCount)
+        let stagingBefore = try snapshotMappedRes4(stagingMemory, image: image)
         let stagingBeforeHash = sha256(stagingBefore)
         guard stagingBeforeHash == expectedBaselineSHA256 else {
             throw StagerError.stagingFailure(
@@ -345,13 +376,13 @@ public enum RE4ExternalRelocationStager {
             )
         }
 
-        let originalAfter = try originalMemory.copyBytes(at: baseVA, count: imageByteCount)
+        let originalAfter = try snapshotMappedRes4(originalMemory, image: image)
         let originalAfterHash = sha256(originalAfter)
         guard originalAfterHash == expectedBaselineSHA256 else {
             throw StagerError.stagingFailure("original Guest Memory baseline changed: \(originalAfterHash)")
         }
 
-        let stagingAfter = try stagingMemory.copyBytes(at: baseVA, count: imageByteCount)
+        let stagingAfter = try snapshotMappedRes4(stagingMemory, image: image)
         let stagingAfterHash = sha256(stagingAfter)
         guard stagingAfterHash == expectedRelocatedSHA256 else {
             throw StagerError.stagingFailure(
