@@ -140,15 +140,15 @@ public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMap
                 throw RE4GuestRuntimeError.invalidMemoryRegion("empty name or zero length")
             }
             let start = UInt64(region.guestBase)
-            let end = region.guestEndExclusive
-            guard end > start, end <= UInt64(UInt32.max) + 1 else {
+            let (end, guestOverflow) = start.addingReportingOverflow(region.length)
+            guard !guestOverflow, end > start, end <= UInt64(UInt32.max) + 1 else {
                 throw RE4GuestRuntimeError.invalidMemoryRegion("Guest VA overflow in \(region.name)")
             }
             guard start >= UInt64(size) else {
                 throw RE4GuestRuntimeError.overlappingMemoryRegion("dense low memory", region.name)
             }
-            guard region.backingEndExclusive >= region.backingOffset,
-                  region.backingEndExclusive <= UInt64(region.backing.byteCount) else {
+            let (backingEnd, backingOverflow) = region.backingOffset.addingReportingOverflow(region.length)
+            guard !backingOverflow, backingEnd <= UInt64(region.backing.byteCount) else {
                 throw RE4GuestRuntimeError.invalidMemoryRegion("backing range exceeds source data in \(region.name)")
             }
             guard region.initialProtection.isSubset(of: region.maxProtection) else {
@@ -190,8 +190,8 @@ public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMap
         name: String = "dense-segment"
     ) throws {
         let start = UInt64(address)
-        let end = start + length
-        guard length > 0, end > start, end <= UInt64(size) else {
+        let (end, overflow) = start.addingReportingOverflow(length)
+        guard !overflow, length > 0, end > start, end <= UInt64(size) else {
             throw RE4GuestRuntimeError.invalidMemoryRegion("dense protection range is outside low Guest Memory")
         }
         guard !(protection.contains(.write) && protection.contains(.execute)) else {
