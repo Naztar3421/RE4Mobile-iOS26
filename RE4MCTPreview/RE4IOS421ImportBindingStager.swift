@@ -130,6 +130,10 @@ public enum RE4IOS421ImportBindingStager {
                     quoted = true
                 case ",":
                     row.append(field); field = ""
+                case "\r\n":
+                    row.append(field); field = ""
+                    if !(row.count == 1 && row[0].isEmpty) { rows.append(row) }
+                    row = []
                 case "\n":
                     row.append(field); field = ""
                     if !(row.count == 1 && row[0].isEmpty) { rows.append(row) }
