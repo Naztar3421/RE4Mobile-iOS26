@@ -56,6 +56,11 @@ struct ContentView: View {
     @State private var externalRelocationApplyMessage = ""
     @State private var externalRelocationApplyCSV = ""
     @State private var stagedRelocatedMemory: RE4GuestARMv6Memory?
+    @State private var stageGRelocationTargetAddresses: [UInt32] = []
+    @State private var isApplyingStageHImports = false
+    @State private var stageHImportApplyMessage = ""
+    @State private var stageHImportApplyCSV = ""
+    @State private var stagedImportBindingMemory: RE4GuestARMv6Memory?
 
     var body: some View {
         ScrollView {
@@ -260,7 +265,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(
-                isApplyingExternalRelocations ||
+                isApplyingExternalRelocations || isApplyingStageHImports ||
                 loadedMachOImage == nil ||
                 mappedMachOMemory == nil ||
                 sharedCacheBackingData == nil
@@ -285,6 +290,46 @@ struct ContentView: View {
                     exportExternalRelocationApplyCSV()
                 } label: {
                     Label("匯出 1,943 筆 relocation staging read-back CSV", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button {
+                activeSheet = .stageHImportPlanImporter
+            } label: {
+                Label(
+                    isApplyingStageHImports
+                        ? "Stage H：正在建立第二份隔離映像並套用 42 筆 imports…"
+                        : "Stage H：驗證 672 筆匯入計畫，隔離套用 42 筆 non-lazy pointers",
+                    systemImage: isApplyingStageHImports ? "hourglass" : "arrow.triangle.branch"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                isApplyingStageHImports || isApplyingExternalRelocations ||
+                stagedRelocatedMemory == nil || stageGRelocationTargetAddresses.count != 1_943 ||
+                sharedCacheBackingData == nil
+            )
+
+            if isApplyingStageHImports {
+                ProgressView("正在驗證 Stage H manifest、複製 Stage G __DATA，並建立第二份 Guest Memory…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.caption)
+            }
+
+            if !stageHImportApplyMessage.isEmpty {
+                Text(stageHImportApplyMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(stageHImportApplyMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            if !stageHImportApplyCSV.isEmpty {
+                Button {
+                    exportStageHImportBindingCSV()
+                } label: {
+                    Label("匯出 42 筆 non-lazy binding read-back CSV", systemImage: "square.and.arrow.up")
                 }
                 .buttonStyle(.bordered)
             }
@@ -729,6 +774,19 @@ struct ContentView: View {
                     }
                 }
                 .ignoresSafeArea()
+            case .stageHImportPlanImporter:
+                MCTDocumentPicker(contentTypes: [.item], asCopy: true) { result in
+                    activeSheet = nil
+                    switch result {
+                    case .picked(let url):
+                        startStageHImportBinding(from: url)
+                    case .failed(let message):
+                        stageHImportApplyMessage = "Stage H manifest 選取失敗：\\(message)"
+                    case .cancelled:
+                        stageHImportApplyMessage = "已取消 Stage H manifest 選取；Stage G 與原始 Guest Memory 均未修改。"
+                    }
+                }
+                .ignoresSafeArea()
             case .machOLoadImporter:
                 MCTDocumentPicker { result in
                     activeSheet = nil
@@ -746,6 +804,10 @@ struct ContentView: View {
                             mappedMachOMemory = nil
                             loadedMachOImage = nil
                             stagedRelocatedMemory = nil
+                            stageGRelocationTargetAddresses = []
+                            stagedImportBindingMemory = nil
+                            stageHImportApplyMessage = ""
+                            stageHImportApplyCSV = ""
                             externalRelocationApplyMessage = ""
                             externalRelocationApplyCSV = ""
                             loadedHLEBindingResult = nil
@@ -912,6 +974,10 @@ struct ContentView: View {
                     sharedCacheSecurityScopedURL = accessed ? url : nil
                     mappedMachOMemory = targetMemory
                     stagedRelocatedMemory = nil
+                            stageGRelocationTargetAddresses = []
+                            stagedImportBindingMemory = nil
+                            stageHImportApplyMessage = ""
+                            stageHImportApplyCSV = ""
                     externalRelocationApplyMessage = ""
                     externalRelocationApplyCSV = ""
                     sharedCacheMountReportMessage = result.report
@@ -952,6 +1018,10 @@ struct ContentView: View {
                 "已選取：\\(url.lastPathComponent)\\n正在驗證 Stage D overlay、原始 Res4 記憶體與 shared-cache 位址…"
             externalRelocationApplyCSV = ""
             stagedRelocatedMemory = nil
+                            stageGRelocationTargetAddresses = []
+                            stagedImportBindingMemory = nil
+                            stageHImportApplyMessage = ""
+                            stageHImportApplyCSV = ""
 
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
@@ -963,6 +1033,7 @@ struct ContentView: View {
                     )
                     DispatchQueue.main.async {
                         stagedRelocatedMemory = result.stagingMemory
+                        stageGRelocationTargetAddresses = result.relocationTargetAddresses
                         externalRelocationApplyMessage = result.report
                         externalRelocationApplyCSV = result.auditCSV
                         isApplyingExternalRelocations = false
@@ -970,6 +1041,10 @@ struct ContentView: View {
                 } catch {
                     DispatchQueue.main.async {
                         stagedRelocatedMemory = nil
+                            stageGRelocationTargetAddresses = []
+                            stagedImportBindingMemory = nil
+                            stageHImportApplyMessage = ""
+                            stageHImportApplyCSV = ""
                         externalRelocationApplyMessage =
                             "Stage G external relocation apply FAIL\\n\\(error.localizedDescription)\\n原始 Guest Memory 未被此流程寫入。"
                         externalRelocationApplyCSV = ""
@@ -983,7 +1058,76 @@ struct ContentView: View {
         }
     }
 
-    private func exportExternalRelocationApplyCSV() {
+    private func exportExternalRelocationApplyCSV() {    private func startStageHImportBinding(from url: URL) {
+        guard let image = loadedMachOImage,
+              let stageGMemory = stagedRelocatedMemory,
+              let cacheData = sharedCacheBackingData,
+              stageGRelocationTargetAddresses.count == 1_943 else {
+            stageHImportApplyMessage =
+                "Stage H blocked：請先完成 Stage G isolated external relocation apply，並保留同一個 shared cache 與 Res4。"
+            return
+        }
+
+        do {
+            let manifestData = try Data(contentsOf: url, options: .mappedIfSafe)
+            guard manifestData.count > 0, manifestData.count <= 2 * 1024 * 1024 else {
+                throw NSError(
+                    domain: "RE4ImportBindingStager",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Stage H CSV 大小超出允許範圍。"]
+                )
+            }
+            isApplyingStageHImports = true
+            stagedImportBindingMemory = nil
+            stageHImportApplyCSV = ""
+            stageHImportApplyMessage =
+                "已選取：\(url.lastPathComponent)\n正在核對 672 筆 Stage H manifest，並建立第二份隔離 Guest Memory…"
+
+            let relocationTargets = stageGRelocationTargetAddresses
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let result = try RE4IOS421ImportBindingStager.applyInIsolatedStaging(
+                        image: image,
+                        cacheData: cacheData,
+                        stageGMemory: stageGMemory,
+                        stageGRelocationTargets: relocationTargets,
+                        manifestData: manifestData
+                    )
+                    DispatchQueue.main.async {
+                        stagedImportBindingMemory = result.stagingMemory
+                        stageHImportApplyMessage = result.report
+                        stageHImportApplyCSV = result.auditCSV
+                        isApplyingStageHImports = false
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        stagedImportBindingMemory = nil
+                        stageHImportApplyMessage =
+                            "Stage H isolated native import apply FAIL\n\(error.localizedDescription)\nStage G 與原始 Guest Memory 均未被此流程寫入。"
+                        stageHImportApplyCSV = ""
+                        isApplyingStageHImports = false
+                    }
+                }
+            }
+        } catch {
+            stageHImportApplyMessage =
+                "Stage H manifest 讀取失敗：\(url.lastPathComponent)\n\(error.localizedDescription)"
+        }
+    }
+
+    private func exportStageHImportBindingCSV() {
+        guard !stageHImportApplyCSV.isEmpty else { return }
+        do {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RE4_StageH_NonLazy_Import_Readback_42.csv")
+            try Data(stageHImportApplyCSV.utf8).write(to: outputURL, options: .atomic)
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            stageHImportApplyMessage += "\nCSV export failed: \(error.localizedDescription)"
+        }
+    }
+
+
         guard !externalRelocationApplyCSV.isEmpty else { return }
         do {
             let outputURL = FileManager.default.temporaryDirectory
@@ -1091,6 +1235,7 @@ private enum PreviewSheet: Identifiable {
     case importer
     case sharedCacheImporter
     case externalRelocationImporter
+    case stageHImportPlanImporter
     case machOImporter
     case machOLoadImporter
     case sharePNG(URL)
@@ -1101,6 +1246,7 @@ private enum PreviewSheet: Identifiable {
         case .importer: return "importer"
         case .sharedCacheImporter: return "shared-cache-importer"
         case .externalRelocationImporter: return "external-relocation-importer"
+        case .stageHImportPlanImporter: return "stage-h-import-plan-importer"
         case .machOImporter: return "macho-importer"
         case .machOLoadImporter: return "macho-load-importer"
         case .sharePNG(let url): return "share-\(url.lastPathComponent)"
