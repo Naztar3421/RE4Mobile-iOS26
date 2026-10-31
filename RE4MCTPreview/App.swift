@@ -170,7 +170,7 @@ struct ContentView: View {
                 )
             }
             .buttonStyle(.bordered)
-            .disabled(isMountingSharedCache)
+            .disabled(isMountingSharedCache || isApplyingExternalRelocations)
 
             if isMountingSharedCache {
                 ProgressView("正在讀取 166.7 MB cache、計算 SHA-256 並驗證 mapping…")
@@ -238,6 +238,7 @@ struct ContentView: View {
                 Label("載入 Mach-O 至 Guest Memory", systemImage: "memorychip.fill")
             }
             .buttonStyle(.bordered)
+            .disabled(isApplyingExternalRelocations)
 
             if !machOMapReportMessage.isEmpty {
                 Text(machOMapReportMessage)
@@ -370,6 +371,7 @@ struct ContentView: View {
                 Label("套用已支援的 HLE 匯入繫結", systemImage: "link")
             }
             .buttonStyle(.bordered)
+            .disabled(isApplyingExternalRelocations)
 
             Button {
                 if let image = loadedMachOImage, let memory = mappedMachOMemory, let entry = image.entryPoint {
