@@ -188,3 +188,18 @@ The runtime memory model now keeps the original low Guest VA byte array (default
 - The app exposes **Sparse Guest Memory／R-W-X 權限自測** and **掛載 iOS 4.2.1 ARMv6 shared cache（slide=0）**. Select the extracted `dyld_shared_cache_armv6` file from Files. The importer retains the security-scoped URL while the memory backing is in use.
 
 This milestone is deliberately pinned to **slide=0**. Non-zero slides are rejected until cache slide/fixup processing is implemented. Mounting the shared cache does not itself resolve the 357 indirect-import-only symbols, apply the 1,943 Res4 external relocations, run dyld initializers, register Objective-C/C++ runtime state, or execute guest code. It only makes the verified cache bytes addressable through the sparse Guest Memory API. The 21 dylib providers share one cache backing; the cache is not extracted into 21 duplicated images.
+
+## Stage G — isolated Res4 external-relocation staging
+
+The Stage G control accepts the pinned 31,088-byte Stage D overlay file `RE4_StageD_Relocation_Overlay_Records_LE.bin`. It verifies the overlay SHA-256, the selected Res4 ARMv6 thin-slice SHA-256, the iOS 4.2.1 / 8C148 shared-cache SHA-256, the exact Res4 segment layout, and every relocation's target/file-offset/addend/candidate address against the currently loaded Guest Memory.
+
+Only after all 1,943 live target words match their original on-disk values does it create a new minimal Guest Memory, remap Res4 and the immutable shared-cache backing, apply the relocation words there, and read all 1,943 values back. The final image and unchanged original image are checked against the pinned Stage D baseline and relocated SHA-256 values. The original loaded Guest Memory is never written by this procedure.
+
+To run it on-device:
+1. Mount the verified iOS 4.2.1 Build 8C148 ARMv6 shared cache.
+2. Load the matching Res4 executable into Guest Memory.
+3. Transfer the supplied Stage D overlay `.bin` file into Files and use **Stage G：預檢並隔離套用 1,943 筆 external relocation**.
+4. Select the overlay. On success, the report will show `Stage G isolated external relocation apply PASS`; the detailed 1,943-row read-back CSV can be exported from the app.
+
+This stage does not install the separate 357 indirect-import-only symbols, lazy binds, HLE, dyld initializers, Objective-C/C++ constructors, or execute guest instructions. The relocated image is retained separately as staging memory for the next validation step.
+
