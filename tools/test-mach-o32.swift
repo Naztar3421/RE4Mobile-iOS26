@@ -19,6 +19,8 @@ enum MachO32ParserTest {
             print("")
             print(try RE4MachO32InitializerAudit.runSyntheticSelfTest())
             print("")
+            print(try RE4MachO32InitializerControlFlowAudit.runSyntheticSelfTest())
+            print("")
             print(try RE4MachO32PointerFixupAudit.runSyntheticSelfTest())
             print("")
             print(try RE4MachO32LegacyDyldAudit.runSyntheticSelfTest())
