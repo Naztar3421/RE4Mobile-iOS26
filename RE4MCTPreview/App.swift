@@ -33,6 +33,10 @@ struct ContentView: View {
     @State private var machOImportPlanReportMessage = ""
     @State private var machOHLEBindingReportMessage = ""
     @State private var machOEntryPreflightMessage = ""
+    @State private var armThumbStateTestMessage = ""
+    @State private var stageJInitializerAuditMessage = ""
+    @State private var stageJInitializerAuditCSV = ""
+    @State private var isRunningStageJInitializerAudit = false
     @State private var machOCallTargetAuditMessage = ""
     @State private var machODirectCallAuditMessage = ""
     @State private var machOStubTargetAuditMessage = ""
@@ -200,6 +204,25 @@ struct ContentView: View {
                 Text(armv6SelfTestMessage)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(armv6SelfTestMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            Button {
+                do {
+                    armThumbStateTestMessage = try RE4ARMv6InstructionSetState.runSyntheticSelfTest()
+                } catch {
+                    armThumbStateTestMessage = "ARM／Thumb state-transition test FAIL\\n\\(error.localizedDescription)"
+                }
+            } label: {
+                Label("ARM／Thumb BX／BLX state-transition 合成測試", systemImage: "arrow.left.arrow.right")
+            }
+            .buttonStyle(.borderedProminent)
+
+            if !armThumbStateTestMessage.isEmpty {
+                Text(armThumbStateTestMessage)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(armThumbStateTestMessage.contains("PASS") ? .green : .red)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
@@ -390,6 +413,57 @@ struct ContentView: View {
                     exportStageILazyPointerImage()
                 } label: {
                     Label("匯出 Stage I-D isolated ARMv6 image", systemImage: "externaldrive")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button {
+                runStageJInitializerAudit()
+            } label: {
+                Label(
+                    isRunningStageJInitializerAudit
+                        ? "Stage J：正在唯讀分析 initializer 依賴…"
+                        : "Stage J：唯讀分析 __mod_init_func 與直接呼叫依賴",
+                    systemImage: isRunningStageJInitializerAudit ? "hourglass" : "list.bullet.rectangle"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                isRunningStageJInitializerAudit ||
+                loadedMachOImage == nil || stagedLazyPointerMemory == nil
+            )
+
+            Text("Stage J 只從 Stage I-D Guest Memory 讀取 initializer array 與 ARM direct-call evidence；不執行 initializer、constructor、dyld helper 或任何 guest 指令。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+
+            if isRunningStageJInitializerAudit {
+                ProgressView("正在核對 initializer 順序、指標狀態、RX 範圍與有限深度的直接呼叫邊…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.caption)
+            }
+
+            if !stageJInitializerAuditMessage.isEmpty {
+                Text(stageJInitializerAuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(stageJInitializerAuditMessage.contains("audit PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            if !stageJInitializerAuditCSV.isEmpty {
+                Button {
+                    exportStageJInitializerAuditCSV()
+                } label: {
+                    Label("匯出 Stage J initializer dependency CSV", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    exportStageJInitializerAuditReport()
+                } label: {
+                    Label("匯出 Stage J initializer audit 報告", systemImage: "doc.text")
                 }
                 .buttonStyle(.bordered)
             }
@@ -884,6 +958,8 @@ struct ContentView: View {
                             stageILazyPointerApplyMessage = ""
             stageILazyPointerApplyCSV = ""
             stageILazyPointerImageData = nil
+            stageJInitializerAuditMessage = ""
+            stageJInitializerAuditCSV = ""
             stagedLazyPointerMemory = nil
                             externalRelocationApplyMessage = ""
                             externalRelocationApplyCSV = ""
@@ -1102,6 +1178,8 @@ struct ContentView: View {
                             stageILazyPointerApplyMessage = ""
             stageILazyPointerApplyCSV = ""
             stageILazyPointerImageData = nil
+            stageJInitializerAuditMessage = ""
+            stageJInitializerAuditCSV = ""
             stagedLazyPointerMemory = nil
 
             DispatchQueue.global(qos: .userInitiated).async {
@@ -1164,6 +1242,8 @@ struct ContentView: View {
             stageILazyPointerApplyMessage = ""
             stageILazyPointerApplyCSV = ""
             stageILazyPointerImageData = nil
+            stageJInitializerAuditMessage = ""
+            stageJInitializerAuditCSV = ""
             stagedLazyPointerMemory = nil
             stageHImportApplyMessage =
                 "已選取：\(url.lastPathComponent)\n正在核對 672 筆 Stage H manifest，並建立第二份隔離 Guest Memory…"
@@ -1233,6 +1313,8 @@ struct ContentView: View {
             stagedLazyPointerMemory = nil
             stageILazyPointerApplyCSV = ""
             stageILazyPointerImageData = nil
+            stageJInitializerAuditMessage = ""
+            stageJInitializerAuditCSV = ""
             stageILazyPointerApplyMessage =
                 "已選取：\(url.lastPathComponent)\n正在建立獨立 Stage I-D Guest Memory，Stage H source 將保持唯讀…"
 
@@ -1262,6 +1344,8 @@ struct ContentView: View {
                             "Stage I-D isolated lazy pointer apply FAIL\n\(error.localizedDescription)\nStage H source、Stage G source、原始 Guest Memory 與 IPA 均未被此流程寫入。"
                         stageILazyPointerApplyCSV = ""
                         stageILazyPointerImageData = nil
+            stageJInitializerAuditMessage = ""
+            stageJInitializerAuditCSV = ""
                         isApplyingStageILazyPointers = false
                     }
                 }
@@ -1293,6 +1377,64 @@ struct ContentView: View {
             activeSheet = .shareTextReport(outputURL)
         } catch {
             stageILazyPointerApplyMessage += "\nImage export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func runStageJInitializerAudit() {
+        guard let image = loadedMachOImage, let memory = stagedLazyPointerMemory else {
+            stageJInitializerAuditMessage = "Stage J blocked：請先在同一個 App session 完成 Stage I-D。"
+            return
+        }
+        isRunningStageJInitializerAudit = true
+        stageJInitializerAuditCSV = ""
+        stageJInitializerAuditMessage =
+            "Stage I-D isolated Guest Memory 已選定。接下來只做 read-only initializer／direct-call 靜態分析…"
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try RE4MachO32InitializerAudit.inspect(
+                    image: image, memory: memory,
+                    maxInstructionsPerFunction: 48,
+                    maxCallDepth: 3,
+                    totalInstructionBudgetPerInitializer: 192
+                )
+                DispatchQueue.main.async {
+                    stageJInitializerAuditMessage = result.report
+                    stageJInitializerAuditCSV = result.auditCSV
+                    isRunningStageJInitializerAudit = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    stageJInitializerAuditMessage =
+                        "Stage J initializer dependency audit FAIL\\n\\(error.localizedDescription)\\nNo initializer or guest instruction was executed."
+                    stageJInitializerAuditCSV = ""
+                    isRunningStageJInitializerAudit = false
+                }
+            }
+        }
+    }
+
+    private func exportStageJInitializerAuditCSV() {
+        guard !stageJInitializerAuditCSV.isEmpty else { return }
+        do {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RE4_StageJ_Initializer_Dependency_Audit.csv")
+            try Data(stageJInitializerAuditCSV.utf8).write(to: outputURL, options: .atomic)
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            stageJInitializerAuditMessage += "\\nCSV export failed: \\(error.localizedDescription)"
+        }
+    }
+
+    private func exportStageJInitializerAuditReport() {
+        guard !stageJInitializerAuditMessage.isEmpty else { return }
+        do {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RE4_StageJ_Initializer_Dependency_Audit.txt")
+            try Data(stageJInitializerAuditMessage.utf8).write(to: outputURL, options: .atomic)
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            stageJInitializerAuditMessage += "\\nReport export failed: \\(error.localizedDescription)"
         }
     }
 
