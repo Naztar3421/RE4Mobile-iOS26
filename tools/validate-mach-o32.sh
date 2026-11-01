@@ -13,6 +13,7 @@ swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
        "$ROOT/RE4MCTPreview/RE4ARMv6EntryPreflight.swift" \
        "$ROOT/RE4MCTPreview/RE4ARMv6InstructionSetState.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32InitializerAudit.swift" \
+       "$ROOT/RE4MCTPreview/RE4MachO32InitializerControlFlowAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32PointerFixupAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32LegacyDyldAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32LegacyRelocationAudit.swift" \
