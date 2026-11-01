@@ -1394,9 +1394,9 @@ struct ContentView: View {
             do {
                 let result = try RE4MachO32InitializerAudit.inspect(
                     image: image, memory: memory,
-                    maxInstructionsPerFunction: 48,
+                    maxInstructionsPerFunction: 384,
                     maxCallDepth: 3,
-                    totalInstructionBudgetPerInitializer: 192
+                    totalInstructionBudgetPerInitializer: 1024
                 )
                 DispatchQueue.main.async {
                     stageJInitializerAuditMessage = result.report
