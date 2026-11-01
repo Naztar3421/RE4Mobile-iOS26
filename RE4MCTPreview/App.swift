@@ -881,6 +881,10 @@ struct ContentView: View {
                             stagedImportBindingMemory = nil
                             stageHImportApplyMessage = ""
                             stageHImportApplyCSV = ""
+                            stageILazyPointerApplyMessage = ""
+            stageILazyPointerApplyCSV = ""
+            stageILazyPointerImageData = nil
+            stagedLazyPointerMemory = nil
                             externalRelocationApplyMessage = ""
                             externalRelocationApplyCSV = ""
                             loadedHLEBindingResult = nil
@@ -1095,6 +1099,10 @@ struct ContentView: View {
                             stagedImportBindingMemory = nil
                             stageHImportApplyMessage = ""
                             stageHImportApplyCSV = ""
+                            stageILazyPointerApplyMessage = ""
+            stageILazyPointerApplyCSV = ""
+            stageILazyPointerImageData = nil
+            stagedLazyPointerMemory = nil
 
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
@@ -1153,6 +1161,10 @@ struct ContentView: View {
             isApplyingStageHImports = true
             stagedImportBindingMemory = nil
             stageHImportApplyCSV = ""
+            stageILazyPointerApplyMessage = ""
+            stageILazyPointerApplyCSV = ""
+            stageILazyPointerImageData = nil
+            stagedLazyPointerMemory = nil
             stageHImportApplyMessage =
                 "已選取：\(url.lastPathComponent)\n正在核對 672 筆 Stage H manifest，並建立第二份隔離 Guest Memory…"
 
