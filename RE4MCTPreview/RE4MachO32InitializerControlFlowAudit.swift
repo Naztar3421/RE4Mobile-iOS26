@@ -689,6 +689,90 @@ public enum RE4MachO32InitializerControlFlowAudit {
                                   cleanupImports: Array(cleanupImports), warnings: warnings)
     }
 
+    /// Emits explicit direct ARM B/BL edges inside a separately recognized SJLJ cleanup range.
+    /// This is a bounded supplementary scan, not landing-pad dispatch or a complete exception CFG.
+    private static func exceptionCleanupEdges(
+        initializerIndex: Int,
+        function: FunctionBounds,
+        source: UInt32,
+        word: UInt32,
+        stubs: [UInt32: String]
+    ) -> [Edge] {
+        guard ((word >> 25) & 7) == 5 else { return [] }
+        let condition = (word >> 28) & 0xF
+        let condText = conditionName(condition)
+
+        if condition == 15 {
+            return [Edge(initializerIndex: initializerIndex, functionSymbol: function.symbol,
+                         source: source, target: nil, edgeType: "blx_immediate_unresolved",
+                         condition: condText, path: .exceptionCleanup,
+                         detail: "Thumb decoder unavailable in cleanup block")]
+        }
+        guard let target = branchTarget(word, pc: source) else {
+            return [Edge(initializerIndex: initializerIndex, functionSymbol: function.symbol,
+                         source: source, target: nil, edgeType: "branch_target_unresolved",
+                         condition: condText, path: .exceptionCleanup,
+                         detail: "cleanup branch target overflow")]
+        }
+
+        let links = (word & (1 << 24)) != 0
+        let detail = stubs[target] ?? "local_or_external"
+        if links {
+            return [Edge(initializerIndex: initializerIndex, functionSymbol: function.symbol,
+                         source: source, target: target, edgeType: "direct_bl",
+                         condition: condText, path: .exceptionCleanup, detail: detail)]
+        }
+
+        if condition == 14 {
+            return [Edge(initializerIndex: initializerIndex, functionSymbol: function.symbol,
+                         source: source, target: target, edgeType: "unconditional_b",
+                         condition: condText, path: .exceptionCleanup,
+                         detail: stubs[target] ?? "")]
+        }
+
+        let takenType = stubs[target] == nil ? "conditional_b_taken" : "conditional_b_taken_import"
+        return [
+            Edge(initializerIndex: initializerIndex, functionSymbol: function.symbol,
+                 source: source, target: target, edgeType: takenType,
+                 condition: condText, path: .exceptionCleanup, detail: stubs[target] ?? ""),
+            Edge(initializerIndex: initializerIndex, functionSymbol: function.symbol,
+                 source: source, target: source &+ 4, edgeType: "conditional_b_fallthrough",
+                 condition: condText, path: .exceptionCleanup, detail: "")
+        ]
+    }
+
+    /// Reads only the already identified [cleanupStart, cleanupEnd) Guest Memory range.
+    /// Returns the number of aligned ARM words inspected; it never executes or writes them.
+    private static func recordExceptionCleanupEdges(
+        _ result: SJLJFunctionResult,
+        initializerIndex: Int,
+        memory: RE4GuestMemoryReading,
+        stubs: [UInt32: String],
+        state: inout InitializerState
+    ) throws -> Int {
+        guard let start = result.cleanupStart, let end = result.cleanupEnd, start < end else {
+            return 0
+        }
+        var pc = start
+        var inspected = 0
+        while pc < end {
+            let word = try readWord(pc, memory: memory)
+            inspected += 1
+            for edge in exceptionCleanupEdges(initializerIndex: initializerIndex,
+                                              function: result.function,
+                                              source: pc, word: word, stubs: stubs) {
+                state.edges.append(edge)
+                if let target = edge.target, let imported = stubs[target] {
+                    state.dependencies.insert(DependencySite(address: edge.source,
+                                                              symbol: imported,
+                                                              path: .exceptionCleanup))
+                }
+            }
+            pc &+= 4
+        }
+        return inspected
+    }
+
     private static func findSJLJContextBase(_ bounds: FunctionBounds,
                                             before registration: UInt32,
                                             memory: RE4GuestMemoryReading) throws -> UInt32? {
@@ -742,7 +826,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
             String(format: "__text VA: 0x%08X; size: 0x%X", text.address, text.size),
             String(format: "__gcc_except_tab VA: 0x%08X; size: 0x%X", eh.address, eh.size),
             "Control-flow: conditional direct B explores taken and fallthrough successors using a bounded worklist.",
-            "Path categories: normal, conditional/alternative, and separately identified exception-cleanup blocks.",
+            "Path categories: normal, conditional/alternative, and exception-cleanup edges within recognized SJLJ blocks.",
             "No ARM/Thumb instruction, initializer, constructor, dyld helper, personality routine, unwinder, or landing pad was executed.",
             ""
         ]
@@ -759,6 +843,8 @@ public enum RE4MachO32InitializerControlFlowAudit {
         var repeatedPathSiteDescriptions = Set<String>()
         var budgetCount = 0
         var edgeCount = 0
+        var cleanupInstructionCount = 0
+        var cleanupEdgeCount = 0
 
         for index in 0..<count {
             let slot = section.address &+ UInt32(index * 4)
@@ -781,6 +867,12 @@ public enum RE4MachO32InitializerControlFlowAudit {
                     if let result = try findSJLJ(function, image: image, memory: memory, stubs: stubs) {
                         sjljResults.append(result)
                         state.dependencies.formUnion(result.cleanupImports)
+                        let edgesBeforeCleanup = state.edges.count
+                        cleanupInstructionCount += try recordExceptionCleanupEdges(
+                            result, initializerIndex: index + 1,
+                            memory: memory, stubs: stubs, state: &state
+                        )
+                        cleanupEdgeCount += state.edges.count - edgesBeforeCleanup
                     }
                 }
                 for site in state.dependencies {
@@ -934,6 +1026,8 @@ public enum RE4MachO32InitializerControlFlowAudit {
             "[Audit totals]",
             "Initializer entries processed: \(count)",
             "Control-flow edges recorded: \(edgeCount)",
+            "Exception-cleanup instructions statically inspected: \(cleanupInstructionCount)",
+            "Exception-cleanup control-flow edges recorded: \(cleanupEdgeCount)",
             "SJLJ functions correlated: \(sjljFunctionCount)",
             "SJLJ call-site table rows parsed: \(sjljRowsCount)",
             "SJLJ code store-to-direct-BL records: \(sjljCodeSiteCount)",
@@ -950,7 +1044,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
             "[Interpretation limits]",
             "The worklist follows both successors of direct conditional ARM B instructions; it does not solve arbitrary register targets, data-dependent control flow, indirect calls, interworking into Thumb, or all ARM instruction semantics.",
             "Function ranges are symbol-bounded using the nearest defined __TEXT,__text N_FUN or N_SECT symbol. Inferred boundaries may not describe every hand-written assembly or inline-data case.",
-            "Exception-cleanup classification is a static branch-over-block pattern around __Unwind_SjLj_Resume plus a matching SJLJ/LSDA record; no personality dispatch or landing-pad execution was tested.",
+            "Exception-cleanup classification is a static branch-over-block pattern around __Unwind_SjLj_Resume plus a matching SJLJ/LSDA record. The edge CSV includes recognized direct ARM B/BL transfers inside that bounded block; it does not reconstruct the incoming landing-pad dispatch edge or indirect/stack-derived transfers.",
             "SJLJ call-site rows are decoded as ULEB128 (landing-pad-index, action) pairs. The report distinguishes positive selector/store-to-direct-BL correlations from the number of distinct LSDA rows matched; a table row may have multiple code sites and a row may have no positive selector. A matched row proves static index/code correspondence, not that a runtime exception actually takes the path.",
             "One static destructor call instruction may execute multiple times in its cleanup loop.",
             "A missing dependency in a given path is not proof that no indirect or data-dependent dependency exists."
@@ -991,8 +1085,35 @@ public enum RE4MachO32InitializerControlFlowAudit {
             throw AuditError.selfTestFailed("conditional branch taken plus fallthrough successors")
         }
 
+        let syntheticFunction = FunctionBounds(start: 0x1000, end: 0x1100,
+                                                 symbol: "<synthetic-cleanup>")
+        let cleanupBranchEdges = exceptionCleanupEdges(
+            initializerIndex: 1, function: syntheticFunction,
+            source: 0x1000, word: branch, stubs: [:]
+        )
+        guard cleanupBranchEdges.count == 2,
+              cleanupBranchEdges[0].edgeType == "conditional_b_taken",
+              cleanupBranchEdges[0].target == 0x1010,
+              cleanupBranchEdges[0].path == .exceptionCleanup,
+              cleanupBranchEdges[1].edgeType == "conditional_b_fallthrough",
+              cleanupBranchEdges[1].target == 0x1004,
+              cleanupBranchEdges[1].path == .exceptionCleanup else {
+            throw AuditError.selfTestFailed("exception-cleanup conditional B edge export")
+        }
+        let cleanupCallEdges = exceptionCleanupEdges(
+            initializerIndex: 1, function: syntheticFunction,
+            source: 0x2000, word: 0xEB000002, stubs: [:]
+        )
+        guard cleanupCallEdges.count == 1,
+              cleanupCallEdges[0].edgeType == "direct_bl",
+              cleanupCallEdges[0].target == 0x2010,
+              cleanupCallEdges[0].path == .exceptionCleanup else {
+            throw AuditError.selfTestFailed("exception-cleanup direct BL edge export")
+        }
+
         return "Stage J.1 control-flow / SJLJ synthetic self-test PASS\n" +
             "Conditional ARM B target and fallthrough successors: PASS\n" +
+            "Exception-cleanup conditional B and direct BL edge export: PASS\n" +
             "SJLJ 20-row ULEB128 call-site table parse: PASS\n" +
             "Dispatch indices (cs_lp + 1): 1..20; action values: 0\n" +
             "Generated metadata and arithmetic only; no Guest Memory write or guest execution."
