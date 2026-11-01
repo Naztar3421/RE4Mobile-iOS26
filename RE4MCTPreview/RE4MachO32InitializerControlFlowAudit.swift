@@ -842,3 +842,107 @@ public enum RE4MachO32InitializerControlFlowAudit {
                             String(index + 1), csv(result.function.symbol),
                             result.lsdaAddress.map { String(format: "0x%08X", $0) } ?? "",
                             String(row.tableIndex), String(row.landingPadIndex), String(row.action),
+                            match.map { String(format: "0x%08X", $0.callAddress) } ?? "",
+                            match.map { csv($0.symbol) } ?? "",
+                            match == nil ? "NO_STATIC_CALLSITE_MATCH" : "MATCHED"
+                        ].joined(separator: ","))
+                    }
+                    for warning in result.warnings {
+                        report.append("Initializer #\(index + 1) / \(result.function.symbol): \(warning)")
+                    }
+                    if !result.table.isEmpty || result.registrationCall != nil {
+                        report.append(String(format: "SJLJ: %@; function 0x%08X; LSDA %@; register %@; table rows %d; call-site matches %d; cleanup %@..%@",
+                                             result.function.symbol, result.function.start,
+                                             result.lsdaAddress.map { String(format: "0x%08X", $0) } ?? "unresolved",
+                                             result.registrationCall.map { String(format: "0x%08X", $0) } ?? "unresolved",
+                                             result.table.count, result.matches.count,
+                                             result.cleanupStart.map { String(format: "0x%08X", $0) } ?? "none",
+                                             result.cleanupEnd.map { String(format: "0x%08X", $0) } ?? "none"))
+                    }
+                }
+                if !state.unresolved.isEmpty {
+                    report.append("Initializer #\(index + 1) unresolved: \(state.unresolved.sorted().joined(separator: "; "))")
+                }
+            } else {
+                dependencyLines.append([
+                    String(index + 1), String(format: "0x%08X", slot), String(format: "0x%08X", target),
+                    transition.targetState == .thumb ? "<Thumb body not decoded>" : "<target outside __text>",
+                    "0", "", "0", "", "0", "", "0", "0", "0", "0", "0", "0", "1", "NO", "NO"
+                ].joined(separator: ","))
+            }
+        }
+
+        func summary(_ path: String) -> String {
+            let sites = totals[path] ?? []
+            let grouped = Dictionary(grouping: sites, by: \.symbol)
+            return grouped.keys.sorted().map { "\($0) x\(grouped[$0]?.count ?? 0)" }.joined(separator: "; ")
+        }
+        report += [
+            "",
+            "[Dependency totals by path — static call sites, not dynamic invocation counts]",
+            "Normal: \(summary("normal"))",
+            "Conditional/alternative: \(summary("conditional"))",
+            "Exception cleanup: \(summary("exception_cleanup"))",
+            "",
+            "[Audit totals]",
+            "Initializer entries processed: \(count)",
+            "Control-flow edges recorded: \(edgeCount)",
+            "SJLJ functions correlated: \(sjljFunctionCount)",
+            "SJLJ call-site table rows parsed: \(sjljRowsCount)",
+            "SJLJ code call-site matches: \(sjljMatchesCount)",
+            "Initializers hitting instruction budget: \(budgetCount)",
+            "Guest instructions executed: NO",
+            "Initializer / constructor / dyld helper / personality / unwinder invoked: NO",
+            "Guest Memory writes performed: NO",
+            "",
+            "[Interpretation limits]",
+            "The worklist follows both successors of direct conditional ARM B instructions; it does not solve arbitrary register targets, data-dependent control flow, indirect calls, interworking into Thumb, or all ARM instruction semantics.",
+            "Function ranges are symbol-bounded using the nearest defined __TEXT,__text N_FUN or N_SECT symbol. Inferred boundaries may not describe every hand-written assembly or inline-data case.",
+            "Exception-cleanup classification is a static branch-over-block pattern around __Unwind_SjLj_Resume plus a matching SJLJ/LSDA record; no personality dispatch or landing-pad execution was tested.",
+            "SJLJ call-site rows are decoded as ULEB128 (landing-pad-index, action) pairs. A matched row proves static index/code correspondence, not that a runtime exception actually takes the path.",
+            "One static destructor call instruction may execute multiple times in its cleanup loop.",
+            "A missing dependency in a given path is not proof that no indirect or data-dependent dependency exists."
+        ]
+
+        return RE4MachO32InitializerControlFlowAuditResult(
+            report: report.joined(separator: "\n") + "\n",
+            dependencyCSV: dependencyLines.joined(separator: "\n") + "\n",
+            edgeCSV: edgeLines.joined(separator: "\n") + "\n",
+            sjljCrosswalkCSV: crosswalkLines.joined(separator: "\n") + "\n"
+        )
+    }
+
+    /// Synthetic parser/edge tests. This never maps or executes guest code.
+    public static func runSyntheticSelfTest() throws -> String {
+        // A tiny SJLJ header: omit LPStart, omit TType, ULEB call-site encoding,
+        // 40-byte table containing (0,0)..(19,0).
+        var bytes: [UInt8] = [0xFF, 0xFF, 0x03, 0x28]
+        for index in 0..<20 { bytes.append(UInt8(index)); bytes.append(0) }
+        guard let parsed = parseSJLJCallSiteTable(bytes),
+              parsed.encoding == 0x03,
+              parsed.rows.count == 20,
+              parsed.rows.first?.landingPadIndex == 1,
+              parsed.rows.last?.landingPadIndex == 20,
+              parsed.rows.allSatisfy({ $0.action == 0 }) else {
+            throw AuditError.selfTestFailed("20-entry SJLJ ULEB128 call-site table")
+        }
+
+        // Verify signed ARM B target decoding and explicit conditional taken/fallthrough split.
+        // BNE +2 at PC 0x1000 reaches 0x1010; fallthrough is 0x1004.
+        let branch: UInt32 = 0x1A000002
+        guard branchTarget(branch, pc: 0x1000) == 0x1010,
+              conditionName((branch >> 28) & 0xF) == "NE" else {
+            throw AuditError.selfTestFailed("conditional branch target/condition decoding")
+        }
+        let successors: Set<UInt32> = [branchTarget(branch, pc: 0x1000)!, 0x1004]
+        guard successors == Set([UInt32(0x1010), UInt32(0x1004)]) else {
+            throw AuditError.selfTestFailed("conditional branch taken plus fallthrough successors")
+        }
+
+        return "Stage J.1 control-flow / SJLJ synthetic self-test PASS\n" +
+            "Conditional ARM B target and fallthrough successors: PASS\n" +
+            "SJLJ 20-row ULEB128 call-site table parse: PASS\n" +
+            "Dispatch indices (cs_lp + 1): 1..20; action values: 0\n" +
+            "Generated metadata and arithmetic only; no Guest Memory write or guest execution."
+    }
+}
