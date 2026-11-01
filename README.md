@@ -216,3 +216,12 @@ To run this step on-device:
 Stage H creates a second, fresh Guest Memory and remaps Res4 plus the pinned immutable shared-cache backing. It copies only Stage G's relocated __DATA segment into the new image, verifies the Stage G image hash, and writes exactly 42 candidate pointers into __DATA,__nl_symbol_ptr. The 315 lazy pointers remain 0x00008DD0; all 315 symbol stubs remain byte-for-byte unchanged. It reads back all 42 writes, verifies no byte changed outside those pointer slots, checks the expected final image hash, and rehashes the Stage G input to prove it remained unchanged.
 
 This is isolated native-pointer staging only. It does not modify the original loaded Guest Memory or Stage G memory, does not run the lazy-binding helper, does not execute guest instructions, does not invoke HLE, and does not run initializers or constructors. The staged image is not yet permission to start the game's entry point.
+
+
+## Stage J — isolated ARM/Thumb state model and read-only initializer audit
+
+The standalone `RE4ARMv6InstructionSetState.swift` tests the architectural target-state decision for `BX` and `BLX register`: bit 0 selects Thumb versus ARM, with halfword versus word address alignment. It is a pure address/state model only. It does **not** mutate the interpreter's CPSR, implement a Thumb decoder, or make the guest runtime executable. Synthetic vectors include the Stage I-D Thumb provider pointer and the ARM `_main` address.
+
+`RE4MachO32InitializerAudit.swift` reads the ordered `S_MOD_INIT_FUNC_POINTERS` array from a staged Guest Memory image, checks pointer preservation against the original thin Mach-O bytes, labels ARM/Thumb targets, validates `__TEXT` RX containment, and performs a bounded read-only scan of direct ARM `BL` call edges. It maps exact symbol-stub addresses back to imported symbol names and recursively inspects bounded local callees. Conditional branches are not fully explored; indirect calls, function extents, Thumb bodies and provider implementations remain explicit unknowns. No guest instruction, initializer, constructor, dyld helper, or HLE trap is invoked.
+
+The on-device Stage J control is enabled only after Stage I-D succeeds in the same app session. It exports a per-initializer CSV and a text report. Host CI uses generated synthetic Mach-O fixtures to validate the state-transition model, ordered initializer parsing, direct local-call evidence, and read-only memory invariant; this does not constitute real-device runtime execution.
