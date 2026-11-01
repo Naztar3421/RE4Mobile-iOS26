@@ -227,6 +227,41 @@ The standalone `RE4ARMv6InstructionSetState.swift` tests the architectural targe
 The on-device Stage J control is enabled only after Stage I-D succeeds in the same app session. It exports a per-initializer CSV and a text report. Host CI uses generated synthetic Mach-O fixtures to validate the state-transition model, ordered initializer parsing, direct local-call evidence, and read-only memory invariant; this does not constitute real-device runtime execution.
 
 
+
+## Stage J.2 — synthetic C++ ABI destructor registry and iostream Init lifecycle model
+
+`RE4CXXRuntimeLifecycleModel.swift` adds two host-only reference models. They do not call provider code, run Guest callbacks, mutate Guest Memory, construct host standard streams, or connect to the ARM interpreter.
+
+### `__cxa_atexit` / `__cxa_finalize` contract model
+
+- Each registration preserves the raw 32-bit function pointer, argument, and DSO handle as separate fields. The low bit is decoded as ARM/Thumb metadata only; the raw pointer is never rewritten and no transfer occurs.
+- Registration returns zero on success and a non-zero result on modeled failure. The exact non-zero value and capacity limit are test-model choices, not target libSystem implementation claims.
+- Finalization plans are DSO-filtered and ordered in reverse registration order. A nil filter means all DSO handles; a zero DSO handle means only entries whose DSO handle is zero.
+- `claimFinalizePlan` marks records before external dispatch would occur, so a repeated or nested planning call cannot re-claim them. A test harness must explicitly mark a claimed record complete after an external callback has returned. The model itself never invokes a callback.
+- The synthetic test covers DSO selection, reverse order, repeated/nested finalization, null-versus-all selection, capacity failure and preservation of a Thumb callback pointer (`0x35E0AFE9`).
+
+The generic Itanium C++ ABI specifies the `__cxa_atexit(f,p,d)` contract, reverse registration order, DSO-filtered `__cxa_finalize`, and at-most-once finalization. It also says the registry representation is implementation-defined and explicitly warns that the document is not authoritative for a particular platform. This model therefore tests the generic contract only; it is not asserted to reproduce Apple's iOS 4.2.1 libSystem implementation.
+
+For the actual Res4 binary, a static ARM instruction/literal calculation at `ExtraProductList` call site `0x521C` yields:
+- callback raw pointer: `0x0019E8F4` (ARM);
+- callback argument: `0`;
+- DSO handle argument: `0x00001000`.
+
+The callback at `0x0019E8F4` statically calls the `std::ios_base::Init` destructor stub at `0x0019FDC0`. The corresponding Stage H / I-C records resolve `__cxa_atexit` to provider pointer `0x35E0AFE9`, marked Thumb. These are static call-site and pointer-resolution facts, not proof that the callback or provider can execute.
+
+### `std::ios_base::Init` reference lifecycle model
+
+A separate model captures the historical GCC 3.4 `ios_init.cc` algorithm as a reference profile:
+- the first instance changes the reference count from 0 to 1, enables C stdio synchronization, constructs narrow standard streams and optionally wide streams, then adds one sentinel reference;
+- subsequent Init instances share the already-constructed standard streams;
+- when a destructor sees a pre-decrement count of 2, it flushes standard output/error/log streams;
+- the sentinel remains, so the standard stream objects are not destroyed by `ios_base::Init::~Init`.
+
+The wide-stream mode is an explicit input because the exact target library build's `_GLIBCXX_USE_WCHAR_T` setting has not yet been proven. The GCC 3.4 source is corroborating reference material, not evidence that the iOS 4.2.1 provider at `0x37496B50` / `0x37496660` has byte-for-byte identical internals. The exact provider implementation still needs static disassembly from the pinned 8C148 shared cache.
+
+Host CI runs both synthetic models. Tests validate state transitions and data plans only; they do not execute callbacks, perform real I/O, run global constructors/destructors, or enable initializer execution. The ARM core remains ARM-only for this project and does not yet implement Thumb CPSR state or Thumb instruction decoding.
+
+
 ## Stage J.1 — conditional control-flow worklist and SJLJ/LSDA crosswalk
 
 `RE4MachO32InitializerControlFlowAudit.swift` extends Stage J without changing Stage I-D memory. It reads instructions, symbols, initializer slots and `__gcc_except_tab` only through the read-only Guest Memory interface.
