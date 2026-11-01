@@ -560,3 +560,145 @@ public enum RE4MachO32InitializerControlFlowAudit {
                 ((word >> 12) & 0xF), decodeARMImmediate(word))
     }
 
+    }
+
+    private static func findSJLJ(_ bounds: FunctionBounds,
+                                 image: RE4MachO32Image,
+                                 memory: RE4GuestMemoryReading,
+                                 stubs: [UInt32: String]) throws -> SJLJFunctionResult? {
+        guard let registerStub = stubs.first(where: { $0.value == "__Unwind_SjLj_Register" })?.key,
+              let resumeStub = stubs.first(where: { $0.value == "__Unwind_SjLj_Resume" })?.key else { return nil }
+        var registration: UInt32?
+        var resume: UInt32?
+        var pc = bounds.start
+        while pc < bounds.end {
+            let word = try readWord(pc, memory: memory)
+            if ((word >> 25) & 7) == 5, (word & (1 << 24)) != 0,
+               let target = branchTarget(word, pc: pc) {
+                if target == registerStub { registration = pc }
+                if target == resumeStub { resume = pc }
+            }
+            // Do not interpret the literal pool following the function's final pop-to-PC as code.
+            let isUnconditionalLDMReturn = ((word >> 25) & 7) == 4 &&
+                word & (1 << 20) != 0 && word & (1 << 15) != 0 &&
+                ((word >> 28) & 0xF) == 14
+            if isUnconditionalLDMReturn { break }
+            pc &+= 4
+        }
+        guard let registerPC = registration else { return nil }
+        let lsda = try findLSDA(in: bounds, before: registerPC, image: image, memory: memory)
+        var warnings: [String] = []
+        var table: [CallSiteRecord] = []
+        if let lsda {
+            do {
+                guard let section = exceptSection(image) else { throw AuditError.malformed("missing __gcc_except_tab") }
+                let available = Int(min(UInt64(512), UInt64(section.address) + UInt64(section.size) - UInt64(lsda)))
+                let bytes = [UInt8](try readBytes(lsda, available, memory: memory))
+                if let parsed = parseSJLJCallSiteTable(bytes) {
+                    table = parsed.rows
+                } else {
+                    warnings.append(String(format: "LSDA 0x%08X header/table could not be parsed", lsda))
+                    table = []
+                }
+            } catch {
+                warnings.append("LSDA read failed: \(error.localizedDescription)")
+            }
+        } else {
+            warnings.append("SJLJ register call found, but PC-relative LSDA literal pattern was not resolved")
+        }
+
+        // Locate the shared cleanup block: an unconditional B skips it to the instruction
+        // immediately after the __Unwind_SjLj_Resume call.
+        var cleanupStart: UInt32?
+        var cleanupEnd: UInt32?
+        if let resumePC = resume {
+            let continuation = resumePC &+ 4
+            var candidate: UInt32?
+            var branchPC = bounds.start
+            while branchPC < resumePC {
+                let word = try readWord(branchPC, memory: memory)
+                let condition = (word >> 28) & 0xF
+                if ((word >> 25) & 7) == 5,
+                   (word & (1 << 24)) == 0,
+                   condition == 14,
+                   branchTarget(word, pc: branchPC) == continuation {
+                    candidate = branchPC
+                }
+                branchPC &+= 4
+            }
+            if let candidate {
+                cleanupStart = candidate &+ 4
+                cleanupEnd = continuation
+            } else {
+                warnings.append("Resume call found, but no unconditional branch-over-cleanup pattern was identified")
+            }
+        }
+
+        // Recover SJLJ call_site values stored at [sp, contextBase+4] and match the next
+        // direct BL to its LSDA dispatch row. This is bounded local constant propagation.
+        var matches: [CallSiteMatch] = []
+        if let contextBase = try findSJLJContextBase(bounds, before: registerPC, memory: memory) {
+            let callSiteOffset = contextBase &+ 4
+            var constants: [UInt32: UInt32] = [:]
+            var pendingCallSite: Int?
+            pc = registerPC &+ 4
+            let scanEnd = cleanupStart ?? bounds.end
+            while pc < scanEnd {
+                let word = try readWord(pc, memory: memory)
+                if let op = immediateDataOp(word) {
+                    if op.opcode == 13 { // MOV Rd,#imm
+                        constants[op.rd] = op.value
+                    } else if op.opcode == 4, let base = constants[op.rn] { // ADD Rd,Rn,#imm
+                        constants[op.rd] = base &+ op.value
+                    } else if op.opcode != 10 && op.opcode != 11 {
+                        constants.removeValue(forKey: op.rd)
+                    }
+                } else if let store = strSPImmediate(word), store.offset == callSiteOffset {
+                    if let value = constants[store.register] { pendingCallSite = Int(value) }
+                    else { pendingCallSite = nil }
+                } else if ((word >> 25) & 7) == 5, (word & (1 << 24)) != 0,
+                          let target = branchTarget(word, pc: pc) {
+                    if let id = pendingCallSite, let name = stubs[target] {
+                        matches.append(CallSiteMatch(callSiteIndex: id, callAddress: pc, symbol: name))
+                    }
+                    pendingCallSite = nil
+                }
+                pc &+= 4
+            }
+        } else {
+            warnings.append("SJLJ context base/call_site stack slot was not recovered")
+        }
+
+        var cleanupImports = Set<DependencySite>()
+        if let start = cleanupStart, let end = cleanupEnd, start < end {
+            pc = start
+            while pc < end {
+                let word = try readWord(pc, memory: memory)
+                if ((word >> 25) & 7) == 5,
+                   (word & (1 << 24)) != 0,
+                   let target = branchTarget(word, pc: pc),
+                   let name = stubs[target] {
+                    cleanupImports.insert(DependencySite(address: pc, symbol: name, path: .exceptionCleanup))
+                }
+                pc &+= 4
+            }
+        }
+
+        return SJLJFunctionResult(function: bounds, lsdaAddress: lsda,
+                                  registrationCall: registration, resumeCall: resume,
+                                  cleanupStart: cleanupStart, cleanupEnd: cleanupEnd,
+                                  table: table, matches: matches,
+                                  cleanupImports: Array(cleanupImports), warnings: warnings)
+    }
+
+    private static func findSJLJContextBase(_ bounds: FunctionBounds,
+                                            before registration: UInt32,
+                                            memory: RE4GuestMemoryReading) throws -> UInt32? {
+        var result: UInt32?
+        var pc = bounds.start
+        while pc < registration {
+            let word = try readWord(pc, memory: memory)
+            if let offset = isAddR0SPImmediate(word) { result = offset }
+            pc &+= 4
+        }
+        return result
