@@ -702,8 +702,6 @@ public enum RE4MachO32InitializerControlFlowAudit {
             pc &+= 4
         }
         return result
-        }
-        return result
     }
 
     private static func csv(_ value: String) -> String {
