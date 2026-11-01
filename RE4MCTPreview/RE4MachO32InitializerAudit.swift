@@ -15,6 +15,7 @@ public struct RE4MachO32InitializerAuditRecord {
     public let instructionWordsInspected: Int
     public let maximumCallDepth: Int
     public let returnBoundary: String
+    public let unresolvedTransfers: [String]
     public let scanLimitReached: Bool
     public let pointerPreserved: Bool
 }
@@ -450,6 +451,7 @@ public enum RE4MachO32InitializerAudit {
                 instructionWordsInspected: aggregate.instructions,
                 maximumCallDepth: aggregate.maximumDepth,
                 returnBoundary: aggregate.returnBoundary,
+                unresolvedTransfers: aggregate.unresolvedTransfers.sorted(),
                 scanLimitReached: aggregate.limitReached,
                 pointerPreserved: pointerPreserved
             ))
@@ -460,7 +462,7 @@ public enum RE4MachO32InitializerAudit {
             "Pointer_State", "Target_In_TEXT_RX", "Initializer_Label",
             "Direct_Call_Targets", "Imported_Callees", "Imported_Callee_Call_Counts", "Local_Callee_Targets",
             "Instruction_Words_Inspected", "Maximum_Call_Depth", "Return_Boundary",
-            "Static_Analysis_Limit", "Pointer_Preserved", "Execution_Performed"
+            "Unresolved_Transfers", "Static_Analysis_Limit", "Pointer_Preserved", "Execution_Performed"
         ]
         var csvLines = [header.joined(separator: ",")]
         for r in records {
@@ -479,6 +481,7 @@ public enum RE4MachO32InitializerAudit {
                 String(r.instructionWordsInspected),
                 String(r.maximumCallDepth),
                 r.returnBoundary,
+                csv(r.unresolvedTransfers.joined(separator: ";")),
                 r.scanLimitReached ? "YES" : "NO",
                 r.pointerPreserved ? "YES" : "NO",
                 "NO"
@@ -559,10 +562,12 @@ public enum RE4MachO32InitializerAudit {
         put32(&bytes, dataSectionOffset + 56, initializerSectionType)
         put32(&bytes, 0x280, 0x00001270)
 
-        // Entry: BL 0x1278; BX LR. Local callee: MOV r0,#1; BX LR.
+        // Entry: BL 0x1278; B 0x1278. The local path contains a conditional LDM-to-PC
+        // followed by BX LR. The static scan must follow B, but must not treat conditional
+        // LDM-to-PC as an unconditional return.
         put32(&bytes, 0x270, 0xEB000000)
-        put32(&bytes, 0x274, 0xE12FFF1E)
-        put32(&bytes, 0x278, 0xE3A00001)
+        put32(&bytes, 0x274, 0xEAFFFFFF)
+        put32(&bytes, 0x278, 0x18BD8080) // conditional LDMIA sp!,{r7,pc}
         put32(&bytes, 0x27C, 0xE12FFF1E)
 
         let image = try RE4MachO32Parser.parse(Data(bytes))
@@ -582,7 +587,8 @@ public enum RE4MachO32InitializerAudit {
               result.records[0].targetInTextRX,
               result.records[0].directCallTargets == [0x1278],
               result.records[0].localCalleeTargets == [0x1278],
-              result.records[0].instructionWordsInspected == 4,
+              result.records[0].instructionWordsInspected == 6,
+              result.records[0].unresolvedTransfers.contains(where: { $0.contains("conditional LDM-to-PC") }),
               result.records[0].pointerPreserved,
               beforeSlot == afterSlot,
               beforeCode == afterCode,
