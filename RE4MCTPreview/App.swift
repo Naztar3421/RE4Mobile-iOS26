@@ -61,6 +61,11 @@ struct ContentView: View {
     @State private var stageHImportApplyMessage = ""
     @State private var stageHImportApplyCSV = ""
     @State private var stagedImportBindingMemory: RE4GuestARMv6Memory?
+    @State private var isApplyingStageILazyPointers = false
+    @State private var stageILazyPointerApplyMessage = ""
+    @State private var stageILazyPointerApplyCSV = ""
+    @State private var stageILazyPointerImageData: Data?
+    @State private var stagedLazyPointerMemory: RE4GuestARMv6Memory?
 
     var body: some View {
         ScrollView {
@@ -330,6 +335,61 @@ struct ContentView: View {
                     exportStageHImportBindingCSV()
                 } label: {
                     Label("匯出 42 筆 non-lazy binding read-back CSV", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Button {
+                activeSheet = .stageILazyPlanImporter
+            } label: {
+                Label(
+                    isApplyingStageILazyPointers
+                        ? "Stage I-D：正在隔離套用 315 筆 lazy pointers…"
+                        : "Stage I-D：隔離套用 315 筆 classic lazy pointers",
+                    systemImage: isApplyingStageILazyPointers ? "hourglass" : "arrow.triangle.branch"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                isApplyingStageILazyPointers || isApplyingStageHImports || isApplyingExternalRelocations ||
+                loadedMachOImage == nil || stagedImportBindingMemory == nil ||
+                stageHImportApplyCSV.isEmpty || stageGRelocationTargetAddresses.count != 1_943 ||
+                sharedCacheBackingData == nil
+            )
+
+            Text("Stage I-D 會從已完成的 Stage H 建立第三份獨立 Guest Memory，只更新 315 個 lazy pointer slots；不執行 dyld helper、ARM 指令、HLE、initializer 或 constructor。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+
+            if isApplyingStageILazyPointers {
+                ProgressView("正在驗證 I-C 計畫、複製 Stage H __DATA，並逐筆讀回 315 個 lazy slots…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.caption)
+            }
+
+            if !stageILazyPointerApplyMessage.isEmpty {
+                Text(stageILazyPointerApplyMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(stageILazyPointerApplyMessage.contains("PASS") ? .green : .red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            if !stageILazyPointerApplyCSV.isEmpty {
+                Button {
+                    exportStageILazyPointerReadbackCSV()
+                } label: {
+                    Label("匯出 315 筆 lazy pointer read-back CSV", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            if stageILazyPointerImageData != nil {
+                Button {
+                    exportStageILazyPointerImage()
+                } label: {
+                    Label("匯出 Stage I-D isolated ARMv6 image", systemImage: "externaldrive")
                 }
                 .buttonStyle(.bordered)
             }
@@ -787,6 +847,19 @@ struct ContentView: View {
                     }
                 }
                 .ignoresSafeArea()
+            case .stageILazyPlanImporter:
+                MCTDocumentPicker(contentTypes: [.item], asCopy: true) { result in
+                    activeSheet = nil
+                    switch result {
+                    case .picked(let url):
+                        startStageILazyPointerApply(from: url)
+                    case .failed(let message):
+                        stageILazyPointerApplyMessage = "Stage I-C 計畫選取失敗：\\(message)"
+                    case .cancelled:
+                        stageILazyPointerApplyMessage = "已取消 Stage I-C 計畫選取；Stage H 與原始 Guest Memory 均未修改。"
+                    }
+                }
+                .ignoresSafeArea()
             case .machOLoadImporter:
                 MCTDocumentPicker { result in
                     activeSheet = nil
@@ -1127,6 +1200,90 @@ struct ContentView: View {
         }
     }
 
+    private func startStageILazyPointerApply(from url: URL) {
+        guard let image = loadedMachOImage,
+              let stageHMemory = stagedImportBindingMemory,
+              let cacheData = sharedCacheBackingData,
+              stageGRelocationTargetAddresses.count == 1_943,
+              !stageHImportApplyCSV.isEmpty else {
+            stageILazyPointerApplyMessage =
+                "Stage I-D blocked：請先在同一個 App session 完成 Stage G 與 Stage H，並保留 shared cache、Res4 與 Stage H readback。"
+            return
+        }
+
+        do {
+            let planData = try Data(contentsOf: url, options: .mappedIfSafe)
+            guard !planData.isEmpty, planData.count <= 2 * 1024 * 1024 else {
+                throw NSError(domain: "RE4LazyPointerStager", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Stage I-C CSV 大小超出允許範圍。"])
+            }
+            isApplyingStageILazyPointers = true
+            stagedLazyPointerMemory = nil
+            stageILazyPointerApplyCSV = ""
+            stageILazyPointerImageData = nil
+            stageILazyPointerApplyMessage =
+                "已選取：\\(url.lastPathComponent)\\n正在建立獨立 Stage I-D Guest Memory，Stage H source 將保持唯讀…"
+
+            let relocationTargets = stageGRelocationTargetAddresses
+            let stageHReadback = stageHImportApplyCSV
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    let result = try RE4IOS421LazyPointerStager.applyInIsolatedStaging(
+                        image: image,
+                        cacheData: cacheData,
+                        stageHMemory: stageHMemory,
+                        stageGRelocationTargets: relocationTargets,
+                        stageHReadbackCSV: stageHReadback,
+                        planData: planData
+                    )
+                    DispatchQueue.main.async {
+                        stagedLazyPointerMemory = result.stagingMemory
+                        stageILazyPointerApplyMessage = result.report
+                        stageILazyPointerApplyCSV = result.auditCSV
+                        stageILazyPointerImageData = result.imageData
+                        isApplyingStageILazyPointers = false
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        stagedLazyPointerMemory = nil
+                        stageILazyPointerApplyMessage =
+                            "Stage I-D isolated lazy pointer apply FAIL\\n\\(error.localizedDescription)\\nStage H source、Stage G source、原始 Guest Memory 與 IPA 均未被此流程寫入。"
+                        stageILazyPointerApplyCSV = ""
+                        stageILazyPointerImageData = nil
+                        isApplyingStageILazyPointers = false
+                    }
+                }
+            }
+        } catch {
+            stageILazyPointerApplyMessage =
+                "Stage I-C 計畫讀取失敗：\\(url.lastPathComponent)\\n\\(error.localizedDescription)"
+        }
+    }
+
+    private func exportStageILazyPointerReadbackCSV() {
+        guard !stageILazyPointerApplyCSV.isEmpty else { return }
+        do {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RE4_StageI_D_Lazy_Pointer_Readback_315.csv")
+            try Data(stageILazyPointerApplyCSV.utf8).write(to: outputURL, options: .atomic)
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            stageILazyPointerApplyMessage += "\\nCSV export failed: \\(error.localizedDescription)"
+        }
+    }
+
+    private func exportStageILazyPointerImage() {
+        guard let imageData = stageILazyPointerImageData else { return }
+        do {
+            let outputURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("RE4_StageI_D_Lazy_Prebound_Isolated_ARMv6.bin")
+            try imageData.write(to: outputURL, options: .atomic)
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            stageILazyPointerApplyMessage += "\\nImage export failed: \\(error.localizedDescription)"
+        }
+    }
+
     private func exportExternalRelocationApplyCSV() {
         guard !externalRelocationApplyCSV.isEmpty else { return }
         do {
@@ -1236,6 +1393,7 @@ private enum PreviewSheet: Identifiable {
     case sharedCacheImporter
     case externalRelocationImporter
     case stageHImportPlanImporter
+    case stageILazyPlanImporter
     case machOImporter
     case machOLoadImporter
     case sharePNG(URL)
@@ -1247,6 +1405,7 @@ private enum PreviewSheet: Identifiable {
         case .sharedCacheImporter: return "shared-cache-importer"
         case .externalRelocationImporter: return "external-relocation-importer"
         case .stageHImportPlanImporter: return "stage-h-import-plan-importer"
+        case .stageILazyPlanImporter: return "stage-i-lazy-plan-importer"
         case .machOImporter: return "macho-importer"
         case .machOLoadImporter: return "macho-load-importer"
         case .sharePNG(let url): return "share-\(url.lastPathComponent)"
