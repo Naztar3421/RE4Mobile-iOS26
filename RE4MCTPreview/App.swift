@@ -1518,7 +1518,7 @@ struct ContentView: View {
                 }
             } catch {
                 DispatchQueue.main.async {
-                    stageJ1AuditMessage = "Stage J.1 initializer control-flow / SJLJ audit FAIL\\n\\(error.localizedDescription)\\nNo guest instruction or initializer was executed."
+                    stageJ1AuditMessage = "Stage J.1 initializer control-flow / SJLJ audit FAIL\n\(error.localizedDescription)\nNo guest instruction or initializer was executed."
                     stageJ1DependencyCSV = ""
                     stageJ1EdgeCSV = ""
                     stageJ1SJLJCSV = ""
@@ -1535,7 +1535,7 @@ struct ContentView: View {
             try Data(content.utf8).write(to: outputURL, options: .atomic)
             activeSheet = .shareTextReport(outputURL)
         } catch {
-            stageJ1AuditMessage += "\\nExport failed (\\(fileName)): \\(error.localizedDescription)"
+            stageJ1AuditMessage += "\nExport failed (\(fileName)): \(error.localizedDescription)"
         }
     }
 
