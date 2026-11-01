@@ -560,8 +560,6 @@ public enum RE4MachO32InitializerControlFlowAudit {
                 ((word >> 12) & 0xF), decodeARMImmediate(word))
     }
 
-    }
-
     private static func findSJLJ(_ bounds: FunctionBounds,
                                  image: RE4MachO32Image,
                                  memory: RE4GuestMemoryReading,
