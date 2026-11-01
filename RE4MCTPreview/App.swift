@@ -37,6 +37,11 @@ struct ContentView: View {
     @State private var stageJInitializerAuditMessage = ""
     @State private var stageJInitializerAuditCSV = ""
     @State private var isRunningStageJInitializerAudit = false
+    @State private var stageJ1AuditMessage = ""
+    @State private var stageJ1DependencyCSV = ""
+    @State private var stageJ1EdgeCSV = ""
+    @State private var stageJ1SJLJCSV = ""
+    @State private var isRunningStageJ1Audit = false
     @State private var machOCallTargetAuditMessage = ""
     @State private var machODirectCallAuditMessage = ""
     @State private var machOStubTargetAuditMessage = ""
@@ -464,6 +469,73 @@ struct ContentView: View {
                     exportStageJInitializerAuditReport()
                 } label: {
                     Label("匯出 Stage J initializer audit 報告", systemImage: "doc.text")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Divider()
+
+            Button {
+                runStageJ1InitializerAudit()
+            } label: {
+                Label(
+                    isRunningStageJ1Audit
+                        ? "Stage J.1：正在分析控制流程與 SJLJ…"
+                        : "Stage J.1：Conditional CFG + SJLJ / LSDA 唯讀稽核",
+                    systemImage: isRunningStageJ1Audit ? "hourglass" : "arrow.triangle.branch"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                isRunningStageJ1Audit ||
+                loadedMachOImage == nil || stagedLazyPointerMemory == nil
+            )
+
+            Text("Stage J.1 從 Stage I-D 隔離 Guest Memory 唯讀解析條件分支兩條路徑、逐 initializer 依賴分類與 SJLJ／__gcc_except_tab 對照；不執行 guest code、initializer、personality 或 unwinder。")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+
+            if isRunningStageJ1Audit {
+                ProgressView("正在建立 conditional worklist、依賴邊與 SJLJ call-site crosswalk…")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.caption)
+            }
+
+            if !stageJ1AuditMessage.isEmpty {
+                Text(stageJ1AuditMessage)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(stageJ1AuditMessage.contains("PASS") ? .green : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+
+            if !stageJ1DependencyCSV.isEmpty {
+                Button {
+                    exportStageJ1Artifact(stageJ1DependencyCSV, fileName: "RE4_StageJ1_Initializer_Dependencies.csv")
+                } label: {
+                    Label("匯出 Stage J.1 per-initializer Dependencies CSV", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    exportStageJ1Artifact(stageJ1EdgeCSV, fileName: "RE4_StageJ1_Control_Flow_Edges.csv")
+                } label: {
+                    Label("匯出 Stage J.1 CFG Edges CSV", systemImage: "arrow.triangle.branch")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    exportStageJ1Artifact(stageJ1SJLJCSV, fileName: "RE4_StageJ1_SJLJ_LSDA_Crosswalk.csv")
+                } label: {
+                    Label("匯出 Stage J.1 SJLJ／LSDA Crosswalk CSV", systemImage: "tablecells")
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    exportStageJ1Artifact(stageJ1AuditMessage, fileName: "RE4_StageJ1_Control_Flow_SJLJ_Audit.txt")
+                } label: {
+                    Label("匯出 Stage J.1 完整稽核報告", systemImage: "doc.text")
                 }
                 .buttonStyle(.bordered)
             }
@@ -960,6 +1032,10 @@ struct ContentView: View {
             stageILazyPointerImageData = nil
             stageJInitializerAuditMessage = ""
             stageJInitializerAuditCSV = ""
+            stageJ1AuditMessage = ""
+            stageJ1DependencyCSV = ""
+            stageJ1EdgeCSV = ""
+            stageJ1SJLJCSV = ""
             stagedLazyPointerMemory = nil
                             externalRelocationApplyMessage = ""
                             externalRelocationApplyCSV = ""
@@ -1411,6 +1487,55 @@ struct ContentView: View {
                     isRunningStageJInitializerAudit = false
                 }
             }
+        }
+    }
+
+    private func runStageJ1InitializerAudit() {
+        guard let image = loadedMachOImage, let memory = stagedLazyPointerMemory else {
+            stageJ1AuditMessage = "Stage J.1 blocked：請先在同一個 App session 完成 Stage I-D。"
+            return
+        }
+        isRunningStageJ1Audit = true
+        stageJ1AuditMessage = "Stage I-D isolated Guest Memory 已選定。接下來只做 conditional CFG／SJLJ／LSDA read-only 靜態分析…"
+        stageJ1DependencyCSV = ""
+        stageJ1EdgeCSV = ""
+        stageJ1SJLJCSV = ""
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let result = try RE4MachO32InitializerControlFlowAudit.inspect(
+                    image: image,
+                    memory: memory,
+                    maxInstructionsPerInitializer: 4096,
+                    maxCallDepth: 3
+                )
+                DispatchQueue.main.async {
+                    stageJ1AuditMessage = result.report
+                    stageJ1DependencyCSV = result.dependencyCSV
+                    stageJ1EdgeCSV = result.edgeCSV
+                    stageJ1SJLJCSV = result.sjljCrosswalkCSV
+                    isRunningStageJ1Audit = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    stageJ1AuditMessage = "Stage J.1 initializer control-flow / SJLJ audit FAIL\\n\\(error.localizedDescription)\\nNo guest instruction or initializer was executed."
+                    stageJ1DependencyCSV = ""
+                    stageJ1EdgeCSV = ""
+                    stageJ1SJLJCSV = ""
+                    isRunningStageJ1Audit = false
+                }
+            }
+        }
+    }
+
+    private func exportStageJ1Artifact(_ content: String, fileName: String) {
+        guard !content.isEmpty else { return }
+        do {
+            let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+            try Data(content.utf8).write(to: outputURL, options: .atomic)
+            activeSheet = .shareTextReport(outputURL)
+        } catch {
+            stageJ1AuditMessage += "\\nExport failed (\\(fileName)): \\(error.localizedDescription)"
         }
     }
 
