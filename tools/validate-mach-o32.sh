@@ -16,6 +16,7 @@ swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32LegacyRelocationAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4ExternalRelocationStager.swift" \
        "$ROOT/RE4MCTPreview/RE4IOS421ImportBindingStager.swift" \
+       "$ROOT/RE4MCTPreview/RE4IOS421LazyPointerStager.swift" \
        "$ROOT/tools/test-mach-o32.swift" \
        -o "$TMP/macho32-test"
 "$TMP/macho32-test"
