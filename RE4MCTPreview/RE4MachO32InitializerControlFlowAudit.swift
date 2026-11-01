@@ -278,3 +278,143 @@ public enum RE4MachO32InitializerControlFlowAudit {
                 let word = try readWord(pc, memory: memory)
                 state.instructionCount += 1
                 let condition = (word >> 28) & 0xF
+                let condText = conditionName(condition)
+                let next = pc &+ 4
+
+                // BX / BLX-register: target is register/data dependent and is never followed.
+                let registerBranch = word & 0x0FFF_FFF0
+                if registerBranch == 0x012F_FF10 {
+                    let rm = word & 0xF
+                    if rm == 14 {
+                        addEdge(&state, index: initializerIndex, function: bounds,
+                                source: pc, target: nil, type: condition == 14 ? "return_bx_lr" : "conditional_return_bx_lr",
+                                condition: condText, path: condition == 14 ? item.path : .conditional)
+                    } else {
+                        state.unresolved.insert(String(format: "BX r%u at 0x%08X has data-dependent target", rm, pc))
+                        addEdge(&state, index: initializerIndex, function: bounds,
+                                source: pc, target: nil, type: "indirect_bx", condition: condText, path: item.path)
+                    }
+                    if condition == 14 { break }
+                    if condition != 15 { queue.append(WorkItem(pc: next, path: item.path)) }
+                    break
+                }
+                if registerBranch == 0x012F_FF30 {
+                    state.unresolved.insert(String(format: "BLX register r%u at 0x%08X not followed", word & 0xF, pc))
+                    addEdge(&state, index: initializerIndex, function: bounds,
+                            source: pc, target: nil, type: "indirect_call_blx_register", condition: condText,
+                            path: condition == 14 ? item.path : .conditional)
+                    if condition != 14 { queue.append(WorkItem(pc: next, path: item.path)) }
+                    break
+                }
+
+                // ARM B/BL immediate. A conditional B has two worklist successors.
+                if ((word >> 25) & 7) == 5 {
+                    if condition == 15 {
+                        state.unresolved.insert(String(format: "BLX immediate at 0x%08X not followed (Thumb decoder unavailable)", pc))
+                        addEdge(&state, index: initializerIndex, function: bounds,
+                                source: pc, target: nil, type: "blx_immediate_unresolved", condition: condText, path: item.path)
+                        break
+                    }
+                    guard let target = branchTarget(word, pc: pc) else {
+                        state.unresolved.insert(String(format: "branch target overflow at 0x%08X", pc))
+                        break
+                    }
+                    let links = (word & (1 << 24)) != 0
+                    if links {
+                        let callPath: PathKind = condition == 14 ? item.path : .conditional
+                        addEdge(&state, index: initializerIndex, function: bounds,
+                                source: pc, target: target, type: "direct_bl", condition: condText, path: callPath,
+                                detail: stubs[target] ?? "local_or_external")
+                        if let imported = stubs[target] {
+                            state.dependencies.insert(DependencySite(address: pc, symbol: imported, path: callPath))
+                        } else if inText(target, image) {
+                            try scanFunction(at: target, path: callPath, depth: depth + 1,
+                                             initializerIndex: initializerIndex, image: image,
+                                             memory: memory, stubs: stubs, maxDepth: maxDepth,
+                                             maxInstructions: maxInstructions, state: &state)
+                        } else {
+                            state.unresolved.insert(String(format: "direct BL at 0x%08X targets unmapped 0x%08X", pc, target))
+                        }
+                        queue.append(WorkItem(pc: next, path: item.path))
+                        break
+                    }
+
+                    if condition == 14 {
+                        addEdge(&state, index: initializerIndex, function: bounds,
+                                source: pc, target: target, type: "unconditional_b", condition: condText, path: item.path)
+                        if let imported = stubs[target] {
+                            state.dependencies.insert(DependencySite(address: pc, symbol: imported, path: item.path))
+                            break
+                        }
+                        if inText(target, image) {
+                            if let targetBounds = functionBounds(at: target, image: image, symbols: state.functionSymbolRanges), targetBounds.start != bounds.start {
+                                try scanFunction(at: target, path: item.path, depth: depth,
+                                                 initializerIndex: initializerIndex, image: image,
+                                                 memory: memory, stubs: stubs, maxDepth: maxDepth,
+                                                 maxInstructions: maxInstructions, state: &state)
+                                break
+                            }
+                            queue.append(WorkItem(pc: target, path: item.path))
+                            break
+                        }
+                        state.unresolved.insert(String(format: "unconditional B at 0x%08X leaves __text to 0x%08X", pc, target))
+                        break
+                    }
+
+                    if let imported = stubs[target] {
+                        addEdge(&state, index: initializerIndex, function: bounds,
+                                source: pc, target: target, type: "conditional_b_taken_import", condition: condText,
+                                path: .conditional, detail: imported)
+                        state.dependencies.insert(DependencySite(address: pc, symbol: imported, path: .conditional))
+                    } else {
+                        addEdge(&state, index: initializerIndex, function: bounds,
+                                source: pc, target: target, type: "conditional_b_taken", condition: condText,
+                                path: .conditional)
+                        queue.append(WorkItem(pc: target, path: .conditional))
+                    }
+                    addEdge(&state, index: initializerIndex, function: bounds,
+                            source: pc, target: next, type: "conditional_b_fallthrough", condition: condText,
+                            path: item.path)
+                    queue.append(WorkItem(pc: next, path: item.path))
+                    break
+                }
+
+                // Conditional LDM/LDR/MOV-to-PC has an unknown taken target and a known fallthrough.
+                if ((word >> 25) & 7) == 4,
+                   word & (1 << 20) != 0,
+                   word & (1 << 15) != 0 {
+                    let isPopReturn = ((word >> 16) & 0xF) == 13 &&
+                        word & (1 << 24) == 0 && word & (1 << 23) != 0 &&
+                        word & (1 << 21) != 0
+                    let edgeType = isPopReturn
+                        ? (condition == 14 ? "return_pop_pc" : "conditional_return_pop_pc")
+                        : (condition == 14 ? "indirect_ldm_pc_exit" : "conditional_indirect_ldm_pc_exit")
+                    addEdge(&state, index: initializerIndex, function: bounds,
+                            source: pc, target: nil, type: edgeType,
+                            condition: condText, path: condition == 14 ? item.path : .conditional)
+                    if !isPopReturn {
+                        state.unresolved.insert(String(format: "LDM-to-PC at 0x%08X has stack-derived target", pc))
+                    }
+                    if condition == 14 { break }
+                    queue.append(WorkItem(pc: next, path: item.path))
+                    break
+                }
+                if ((word >> 26) & 3) == 1,
+                   word & (1 << 20) != 0,
+                   word & (1 << 22) == 0,
+                   ((word >> 12) & 0xF) == 15 {
+                    addEdge(&state, index: initializerIndex, function: bounds,
+                            source: pc, target: nil, type: condition == 14 ? "indirect_ldr_pc_exit" : "conditional_indirect_ldr_pc_exit",
+                            condition: condText, path: condition == 14 ? item.path : .conditional)
+                    state.unresolved.insert(String(format: "LDR-to-PC at 0x%08X has data-derived target", pc))
+                    if condition == 14 { break }
+                    queue.append(WorkItem(pc: next, path: item.path))
+                    break
+                }
+                // MOV pc,lr return.
+                if ((word >> 26) & 3) == 0,
+                   ((word >> 21) & 0xF) == 13,
+                   ((word >> 12) & 0xF) == 15,
+                   (word & 0xF) == 14 {
+                    addEdge(&state, index: initializerIndex, function: bounds,
+                            source: pc, target: nil, type: condition == 14 ? "return_mov_pc_lr" : "conditional_return_mov_pc_lr",
