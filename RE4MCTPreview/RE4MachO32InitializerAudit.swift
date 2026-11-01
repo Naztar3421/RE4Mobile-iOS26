@@ -10,6 +10,7 @@ public struct RE4MachO32InitializerAuditRecord {
     public let initializerLabel: String
     public let directCallTargets: [UInt32]
     public let importedCallees: [String]
+    public let importedCalleeCallCounts: [String: Int]
     public let localCalleeTargets: [UInt32]
     public let instructionWordsInspected: Int
     public let maximumCallDepth: Int
@@ -32,6 +33,7 @@ public enum RE4MachO32InitializerAudit {
     private struct ScanAggregate {
         var directCalls = Set<UInt32>()
         var importedSymbols = Set<String>()
+        var importedCallSiteCounts: [String: Int] = [:]
         var localCallees = Set<UInt32>()
         var unresolvedTransfers = Set<String>()
         var instructions = 0
@@ -202,6 +204,7 @@ public enum RE4MachO32InitializerAudit {
                     aggregate.directCalls.insert(target)
                     if let imported = stubSymbolByAddress[target] {
                         aggregate.importedSymbols.insert(imported)
+                        aggregate.importedCallSiteCounts[imported, default: 0] += 1
                     } else if containsExecutableWord(target, image: image) {
                         aggregate.localCallees.insert(target)
                         if depth < maxCallDepth {
@@ -245,6 +248,7 @@ public enum RE4MachO32InitializerAudit {
                 // helper. Follow that in-image edge as control flow, not as a function call.
                 if let imported = stubSymbolByAddress[target] {
                     aggregate.importedSymbols.insert(imported)
+                    aggregate.importedCallSiteCounts[imported, default: 0] += 1
                     if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "TAIL_BRANCH_TO_IMPORT" }
                     return
                 }
@@ -327,9 +331,9 @@ public enum RE4MachO32InitializerAudit {
     public static func inspect(
         image: RE4MachO32Image,
         memory: RE4GuestMemoryReading,
-        maxInstructionsPerFunction: Int = 96,
+        maxInstructionsPerFunction: Int = 384,
         maxCallDepth: Int = 3,
-        totalInstructionBudgetPerInitializer: Int = 512
+        totalInstructionBudgetPerInitializer: Int = 1024
     ) throws -> RE4MachO32InitializerAuditResult {
         let matches = image.segments.flatMap { segment in
             segment.sections.filter {
@@ -373,6 +377,7 @@ public enum RE4MachO32InitializerAudit {
         var executableCount = 0
         var preservedCount = 0
         var aggregateImportCounts: [String: Int] = [:]
+        var aggregateImportCallSiteCounts: [String: Int] = [:]
         var aggregateLocalCallCount = 0
         var scansWithLimit = 0
 
@@ -408,11 +413,11 @@ public enum RE4MachO32InitializerAudit {
             var aggregate = ScanAggregate()
             if state == .arm && textRX && containsExecutableWord(target, image: image) {
                 var visited = Set<UInt32>()
-                var budget = max(1, min(totalInstructionBudgetPerInitializer, 2048))
+                var budget = max(1, min(totalInstructionBudgetPerInitializer, 4096))
                 try scanFunction(
                     at: target, image: image, memory: memory,
                     stubSymbolByAddress: stubSymbolByAddress,
-                    maxInstructionsPerFunction: max(1, min(maxInstructionsPerFunction, 128)),
+                    maxInstructionsPerFunction: max(1, min(maxInstructionsPerFunction, 512)),
                     maxCallDepth: max(0, min(maxCallDepth, 8)),
                     depth: 0, visited: &visited,
                     remainingBudget: &budget, aggregate: &aggregate
@@ -428,6 +433,9 @@ public enum RE4MachO32InitializerAudit {
             for name in aggregate.importedSymbols {
                 aggregateImportCounts[name, default: 0] += 1
             }
+            for (name, callCount) in aggregate.importedCallSiteCounts {
+                aggregateImportCallSiteCounts[name, default: 0] += callCount
+            }
             aggregateLocalCallCount += aggregate.localCallees.count
             if aggregate.limitReached { scansWithLimit += 1 }
 
@@ -437,6 +445,7 @@ public enum RE4MachO32InitializerAudit {
                 initializerLabel: labels.joined(separator: ";"),
                 directCallTargets: aggregate.directCalls.sorted(),
                 importedCallees: aggregate.importedSymbols.sorted(),
+                importedCalleeCallCounts: aggregate.importedCallSiteCounts,
                 localCalleeTargets: aggregate.localCallees.sorted(),
                 instructionWordsInspected: aggregate.instructions,
                 maximumCallDepth: aggregate.maximumDepth,
@@ -449,7 +458,7 @@ public enum RE4MachO32InitializerAudit {
         let header = [
             "Index", "Initializer_Slot_VA", "Raw_Pointer_Value", "Target_VA",
             "Pointer_State", "Target_In_TEXT_RX", "Initializer_Label",
-            "Direct_Call_Targets", "Imported_Callees", "Local_Callee_Targets",
+            "Direct_Call_Targets", "Imported_Callees", "Imported_Callee_Call_Counts", "Local_Callee_Targets",
             "Instruction_Words_Inspected", "Maximum_Call_Depth", "Return_Boundary",
             "Static_Analysis_Limit", "Pointer_Preserved", "Execution_Performed"
         ]
@@ -465,6 +474,7 @@ public enum RE4MachO32InitializerAudit {
                 csv(r.initializerLabel),
                 csv(r.directCallTargets.map { String(format: "0x%08X", $0) }.joined(separator: ";")),
                 csv(r.importedCallees.joined(separator: ";")),
+                csv(r.importedCalleeCallCounts.keys.sorted().map { "\($0) x\(r.importedCalleeCallCounts[$0] ?? 0)" }.joined(separator: ";")),
                 csv(r.localCalleeTargets.map { String(format: "0x%08X", $0) }.joined(separator: ";")),
                 String(r.instructionWordsInspected),
                 String(r.maximumCallDepth),
@@ -477,6 +487,7 @@ public enum RE4MachO32InitializerAudit {
 
         let uniqueTargets = Set(records.map(\.targetAddress)).count
         let importedNames = Set(records.flatMap(\.importedCallees)).sorted()
+        let totalImportedCallSites = aggregateImportCallSiteCounts.values.reduce(0, +)
         var lines = [
             "Mach-O initializer dependency audit PASS (read-only)",
             "Initializer section: __DATA,__mod_init_func (S_MOD_INIT_FUNC_POINTERS)",
@@ -488,6 +499,7 @@ public enum RE4MachO32InitializerAudit {
             "Pointer values preserved against original thin-slice bytes: \(preservedCount)/\(records.count)",
             "Initializer labels found: \(records.filter { !$0.initializerLabel.isEmpty }.count)",
             "Distinct imported callees statically reached through symbol stubs: \(importedNames.count)",
+            "Direct imported call sites observed: \(totalImportedCallSites)",
             "Local direct-call targets recorded: \(aggregateLocalCallCount)",
             "Initializer scans hitting a static-analysis bound: \(scansWithLimit)",
             "Guest instructions executed: NO",
@@ -496,7 +508,11 @@ public enum RE4MachO32InitializerAudit {
             "[Imported callees observed]"
         ]
         if importedNames.isEmpty { lines.append("(none observed in bounded direct-call scans)") }
-        else { lines += importedNames }
+        else {
+            lines += importedNames.map {
+                "\($0) — \(aggregateImportCallSiteCounts[$0] ?? 0) observed call site(s) across \(aggregateImportCounts[$0] ?? 0) initializer(s)"
+            }
+        }
         lines += [
             "",
             "[Interpretation limits]",
