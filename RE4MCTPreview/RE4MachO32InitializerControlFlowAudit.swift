@@ -732,7 +732,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
         let stubs = stubSymbols(image)
         let functionSymbolRanges = functionSymbols(image)
         let count = Int(section.size / 4)
-        var dependencyLines = ["Initializer_Index,Initializer_Slot_VA,Initializer_Target_VA,Initializer_Label,Functions_Visited,Normal_Imports,Normal_Call_Sites,Conditional_Imports,Conditional_Call_Sites,Exception_Cleanup_Imports,Exception_Cleanup_Call_Sites,LSDA_Functions,LSDA_Callsites,Matched_SJLJ_Callsites,Matched_SJLJ_Table_Rows,Unmatched_SJLJ_Table_Rows,Duplicate_SJLJ_Indices,CFG_Instructions,Max_Call_Depth,Unresolved_Count,Worklist_Budget_Reached,Guest_Execution"]
+        var dependencyLines = ["Initializer_Index,Initializer_Slot_VA,Initializer_Target_VA,Initializer_Label,Functions_Visited,Normal_Imports,Normal_Call_Sites,Conditional_Imports,Conditional_Call_Sites,Exception_Cleanup_Imports,Exception_Cleanup_Call_Sites,LSDA_Functions,LSDA_Callsites,SJLJ_Store_DirectBL_Correlations,Matched_SJLJ_Table_Rows,Unmatched_SJLJ_Table_Rows,Duplicate_SJLJ_Indices,CFG_Instructions,Max_Call_Depth,Unresolved_Count,Worklist_Budget_Reached,Guest_Execution"]
         var edgeLines = ["Initializer_Index,Function_Symbol,Source_VA,Target_VA,Edge_Type,Condition,Path,Detail"]
         var crosswalkLines = ["Initializer_Index,Function_Symbol,LSDA_VA,LSDA_Table_Row,LandingPad_Dispatch_Index,Action,Matched_Call_VAs,Imported_Symbols,Match_Status"]
         var report = [
@@ -755,6 +755,8 @@ public enum RE4MachO32InitializerControlFlowAudit {
         var sjljMatchedTableRowCount = 0
         var sjljUnmatchedTableRowCount = 0
         var sjljDuplicateIndexCount = 0
+        var uniqueStaticImportSites = Set<String>()
+        var repeatedPathSiteDescriptions = Set<String>()
         var budgetCount = 0
         var edgeCount = 0
 
@@ -779,6 +781,19 @@ public enum RE4MachO32InitializerControlFlowAudit {
                     if let result = try findSJLJ(function, image: image, memory: memory, stubs: stubs) {
                         sjljResults.append(result)
                         state.dependencies.formUnion(result.cleanupImports)
+                    }
+                }
+                for site in state.dependencies {
+                    uniqueStaticImportSites.insert("\(index + 1)|\(site.address)|\(site.symbol)")
+                }
+                let groupedPathSites = Dictionary(grouping: state.dependencies, by: { "\($0.address)|\($0.symbol)" })
+                for sites in groupedPathSites.values {
+                    let paths = Set(sites.map(\.path))
+                    if paths.count > 1, let site = sites.first {
+                        let pathNames = paths.map(\.rawValue).sorted().joined(separator: "/")
+                        repeatedPathSiteDescriptions.insert(
+                            String(format: "%@ @ 0x%08X (%@)", site.symbol, site.address, pathNames)
+                        )
                     }
                 }
                 let normal = state.dependencies.filter { $0.path == .normal }
@@ -875,11 +890,14 @@ public enum RE4MachO32InitializerControlFlowAudit {
                         report.append("Initializer #\(index + 1) / \(result.function.symbol): \(warning)")
                     }
                     if !result.table.isEmpty || result.registrationCall != nil {
-                        report.append(String(format: "SJLJ: %@; function 0x%08X; LSDA %@; register %@; table rows %d; call-site matches %d; cleanup %@..%@",
+                        report.append(String(format: "SJLJ: %@; function 0x%08X; LSDA %@; register %@; table rows %d; positive selector/store-to-direct-BL correlations %d; rows with matches %d; rows without matches %d; duplicate selector indices %d; cleanup %@..%@",
                                              result.function.symbol, result.function.start,
                                              result.lsdaAddress.map { String(format: "0x%08X", $0) } ?? "unresolved",
                                              result.registrationCall.map { String(format: "0x%08X", $0) } ?? "unresolved",
                                              result.table.count, result.matches.count,
+                                             result.table.filter { row in result.matches.contains { $0.callSiteIndex == row.tableIndex } }.count,
+                                             result.table.filter { row in !result.matches.contains { $0.callSiteIndex == row.tableIndex } }.count,
+                                             Dictionary(grouping: result.matches, by: \.callSiteIndex).values.filter { $0.count > 1 }.count,
                                              result.cleanupStart.map { String(format: "0x%08X", $0) } ?? "none",
                                              result.cleanupEnd.map { String(format: "0x%08X", $0) } ?? "none"))
                     }
@@ -911,6 +929,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
             "Normal: \(summary("normal"))",
             "Conditional/alternative: \(summary("conditional"))",
             "Exception cleanup: \(summary("exception_cleanup"))",
+            "Path-classified entries can repeat one static call site when it is reachable through more than one path label.",
             "",
             "[Audit totals]",
             "Initializer entries processed: \(count)",
@@ -921,6 +940,8 @@ public enum RE4MachO32InitializerControlFlowAudit {
             "SJLJ LSDA table rows with at least one code-site match: \(sjljMatchedTableRowCount)",
             "SJLJ LSDA table rows without a code-site match: \(sjljUnmatchedTableRowCount)",
             "SJLJ table indices referenced by multiple code sites: \(sjljDuplicateIndexCount)",
+            "Unique static imported call sites after path-label de-duplication: \(uniqueStaticImportSites.count)",
+            "Static imported call sites appearing under multiple path labels: \(repeatedPathSiteDescriptions.sorted().joined(separator: "; "))",
             "Initializers hitting instruction budget: \(budgetCount)",
             "Guest instructions executed: NO",
             "Initializer / constructor / dyld helper / personality / unwinder invoked: NO",
@@ -930,7 +951,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
             "The worklist follows both successors of direct conditional ARM B instructions; it does not solve arbitrary register targets, data-dependent control flow, indirect calls, interworking into Thumb, or all ARM instruction semantics.",
             "Function ranges are symbol-bounded using the nearest defined __TEXT,__text N_FUN or N_SECT symbol. Inferred boundaries may not describe every hand-written assembly or inline-data case.",
             "Exception-cleanup classification is a static branch-over-block pattern around __Unwind_SjLj_Resume plus a matching SJLJ/LSDA record; no personality dispatch or landing-pad execution was tested.",
-            "SJLJ call-site rows are decoded as ULEB128 (landing-pad-index, action) pairs. A matched row proves static index/code correspondence, not that a runtime exception actually takes the path.",
+            "SJLJ call-site rows are decoded as ULEB128 (landing-pad-index, action) pairs. The report distinguishes positive selector/store-to-direct-BL correlations from the number of distinct LSDA rows matched; a table row may have multiple code sites and a row may have no positive selector. A matched row proves static index/code correspondence, not that a runtime exception actually takes the path.",
             "One static destructor call instruction may execute multiple times in its cleanup loop.",
             "A missing dependency in a given path is not proof that no indirect or data-dependent dependency exists."
         ]
