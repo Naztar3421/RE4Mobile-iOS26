@@ -734,7 +734,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
         let count = Int(section.size / 4)
         var dependencyLines = ["Initializer_Index,Initializer_Slot_VA,Initializer_Target_VA,Initializer_Label,Functions_Visited,Normal_Imports,Normal_Call_Sites,Conditional_Imports,Conditional_Call_Sites,Exception_Cleanup_Imports,Exception_Cleanup_Call_Sites,LSDA_Functions,LSDA_Callsites,Matched_SJLJ_Callsites,CFG_Instructions,Max_Call_Depth,Unresolved_Count,Worklist_Budget_Reached,Guest_Execution"]
         var edgeLines = ["Initializer_Index,Function_Symbol,Source_VA,Target_VA,Edge_Type,Condition,Path,Detail"]
-        var crosswalkLines = ["Initializer_Index,Function_Symbol,LSDA_VA,Table_Row,Callsite_Dispatch_Index,Action,Matched_Call_VA,Imported_Symbol,Match_Status"]
+        var crosswalkLines = ["Initializer_Index,Function_Symbol,LSDA_VA,LSDA_Table_Row,LandingPad_Dispatch_Index,Action,Matched_Call_VAs,Imported_Symbols,Match_Status"]
         var report = [
             "Stage J.1 — Control-Flow & SJLJ Landing-Pad Audit (read-only)",
             "Initializer section: __DATA,__mod_init_func (S_MOD_INIT_FUNC_POINTERS)",
@@ -751,7 +751,10 @@ public enum RE4MachO32InitializerControlFlowAudit {
         ]
         var sjljFunctionCount = 0
         var sjljRowsCount = 0
-        var sjljMatchesCount = 0
+        var sjljCodeSiteCount = 0
+        var sjljMatchedTableRowCount = 0
+        var sjljUnmatchedTableRowCount = 0
+        var sjljDuplicateIndexCount = 0
         var budgetCount = 0
         var edgeCount = 0
 
@@ -787,7 +790,21 @@ public enum RE4MachO32InitializerControlFlowAudit {
                 if state.budgetReached { budgetCount += 1 }
                 sjljFunctionCount += sjljResults.count
                 sjljRowsCount += sjljResults.reduce(0) { $0 + $1.table.count }
-                sjljMatchesCount += sjljResults.reduce(0) { $0 + $1.matches.count }
+                sjljCodeSiteCount += sjljResults.reduce(0) { $0 + $1.matches.count }
+                sjljMatchedTableRowCount += sjljResults.reduce(0) { total, result in
+                    total + result.table.filter { row in
+                        result.matches.contains { $0.callSiteIndex == row.tableIndex }
+                    }.count
+                }
+                sjljUnmatchedTableRowCount += sjljResults.reduce(0) { total, result in
+                    total + result.table.filter { row in
+                        !result.matches.contains { $0.callSiteIndex == row.tableIndex }
+                    }.count
+                }
+                sjljDuplicateIndexCount += sjljResults.reduce(0) { total, result in
+                    let groups = Dictionary(grouping: result.matches, by: \.callSiteIndex)
+                    return total + groups.values.filter { $0.count > 1 }.count
+                }
                 edgeCount += state.edges.count
 
                 let importedList: (Set<DependencySite>) -> String = { sites in
@@ -813,6 +830,16 @@ public enum RE4MachO32InitializerControlFlowAudit {
                     String(sjljResults.count),
                     String(sjljResults.reduce(0) { $0 + $1.table.count }),
                     String(sjljResults.reduce(0) { $0 + $1.matches.count }),
+                    String(sjljResults.reduce(0) { total, result in
+                        total + result.table.filter { row in result.matches.contains { $0.callSiteIndex == row.tableIndex } }.count
+                    }),
+                    String(sjljResults.reduce(0) { total, result in
+                        total + result.table.filter { row in !result.matches.contains { $0.callSiteIndex == row.tableIndex } }.count
+                    }),
+                    String(sjljResults.reduce(0) { total, result in
+                        let groups = Dictionary(grouping: result.matches, by: \.callSiteIndex)
+                        return total + groups.values.filter { $0.count > 1 }.count
+                    }),
                     String(state.instructionCount),
                     String(state.maxDepthReached),
                     String(state.unresolved.count),
@@ -830,17 +857,18 @@ public enum RE4MachO32InitializerControlFlowAudit {
                     ].joined(separator: ","))
                 }
                 for result in sjljResults {
-                    let matchByIndex = Dictionary(result.matches.map { ($0.callSiteIndex, $0) },
-                                                  uniquingKeysWith: { first, _ in first })
+                    let matchesByIndex = Dictionary(grouping: result.matches, by: \.callSiteIndex)
                     for row in result.table {
-                        let match = matchByIndex[row.landingPadIndex]
+                        let rowMatches = matchesByIndex[row.tableIndex] ?? []
+                        let matchedAddresses = rowMatches.map { String(format: "0x%08X", $0.callAddress) }.joined(separator: ";")
+                        let matchedSymbols = rowMatches.map { csv($0.symbol) }.joined(separator: ";")
+                        let status = rowMatches.isEmpty ? "NO_STATIC_CALLSITE_MATCH" :
+                            (rowMatches.count > 1 ? "MULTIPLE_STATIC_CALLSITES_SHARE_INDEX" : "MATCHED")
                         crosswalkLines.append([
                             String(index + 1), csv(result.function.symbol),
                             result.lsdaAddress.map { String(format: "0x%08X", $0) } ?? "",
                             String(row.tableIndex), String(row.landingPadIndex), String(row.action),
-                            match.map { String(format: "0x%08X", $0.callAddress) } ?? "",
-                            match.map { csv($0.symbol) } ?? "",
-                            match == nil ? "NO_STATIC_CALLSITE_MATCH" : "MATCHED"
+                            csv(matchedAddresses), csv(matchedSymbols), status
                         ].joined(separator: ","))
                     }
                     for warning in result.warnings {
@@ -861,9 +889,13 @@ public enum RE4MachO32InitializerControlFlowAudit {
                 }
             } else {
                 dependencyLines.append([
-                    String(index + 1), String(format: "0x%08X", slot), String(format: "0x%08X", target),
+                    String(index + 1),
+                    String(format: "0x%08X", slot),
+                    String(format: "0x%08X", target),
                     transition.targetState == .thumb ? "<Thumb body not decoded>" : "<target outside __text>",
-                    "0", "", "0", "", "0", "", "0", "0", "0", "0", "0", "0", "1", "NO", "NO"
+                    "0", "", "0", "", "0", "", "0",
+                    "0", "0", "0", "0", "0", "0",
+                    "0", "0", "1", "NO", "NO"
                 ].joined(separator: ","))
             }
         }
@@ -885,7 +917,10 @@ public enum RE4MachO32InitializerControlFlowAudit {
             "Control-flow edges recorded: \(edgeCount)",
             "SJLJ functions correlated: \(sjljFunctionCount)",
             "SJLJ call-site table rows parsed: \(sjljRowsCount)",
-            "SJLJ code call-site matches: \(sjljMatchesCount)",
+            "SJLJ code store-to-direct-BL records: \(sjljCodeSiteCount)",
+            "SJLJ LSDA table rows with at least one code-site match: \(sjljMatchedTableRowCount)",
+            "SJLJ LSDA table rows without a code-site match: \(sjljUnmatchedTableRowCount)",
+            "SJLJ table indices referenced by multiple code sites: \(sjljDuplicateIndexCount)",
             "Initializers hitting instruction budget: \(budgetCount)",
             "Guest instructions executed: NO",
             "Initializer / constructor / dyld helper / personality / unwinder invoked: NO",
