@@ -134,6 +134,7 @@ public enum RE4MachO32InitializerAudit {
         aggregate.maximumDepth = max(aggregate.maximumDepth, depth)
 
         var pc = startAddress
+        var visitedProgramCounters = Set<UInt32>()
         for _ in 0..<maxInstructionsPerFunction {
             guard remainingBudget > 0 else {
                 aggregate.limitReached = true
@@ -146,14 +147,28 @@ public enum RE4MachO32InitializerAudit {
                 }
                 return
             }
+            guard visitedProgramCounters.insert(pc).inserted else {
+                aggregate.unresolvedTransfers.insert(String(format: "control-flow loop at 0x%08X", pc))
+                if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "CONTROL_FLOW_LOOP" }
+                return
+            }
 
             let word = try readWord(pc, memory: memory)
             remainingBudget -= 1
             aggregate.instructions += 1
+            let condition = (word >> 28) & 0xF
 
-            // BX LR is a return. Other BX forms are indirect control transfers and are not followed.
+            // A conditional transfer may not be taken. Record it and continue only on the
+            // fall-through path; the alternate path is deliberately not guessed.
             let registerBranch = word & 0x0FFF_FFF0
             if registerBranch == 0x012F_FF10 {
+                if condition != 0xE {
+                    aggregate.unresolvedTransfers.insert(
+                        String(format: "conditional BX%X at 0x%08X (alternate path not followed)", condition, pc)
+                    )
+                    pc = pc &+ 4
+                    continue
+                }
                 if (word & 0xF) == 14 {
                     if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "BX_LR" }
                 } else {
@@ -168,14 +183,20 @@ public enum RE4MachO32InitializerAudit {
                 continue
             }
 
-            // ARM B/BL immediate. BL records a possible call edge; direct local callees are scanned
-            // recursively, while an exact symbol-stub match is recorded as an imported dependency.
+            // ARM B/BL immediate. BL records a possible call edge; exact symbol-stub targets
+            // become imported dependencies, and in-image callees are inspected recursively.
             if ((word >> 25) & 7) == 5 {
+                if condition == 0xF {
+                    aggregate.unresolvedTransfers.insert(
+                        String(format: "BLX immediate at 0x%08X (Thumb target not followed)", pc)
+                    )
+                    if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "BLX_IMMEDIATE_NOT_FOLLOWED" }
+                    return
+                }
                 guard let target = branchTarget(word, pc: pc) else {
                     aggregate.unresolvedTransfers.insert(String(format: "ARM branch target overflow at 0x%08X", pc))
                     return
                 }
-                let condition = (word >> 28) & 0xF
                 let links = (word & (1 << 24)) != 0
                 if links {
                     aggregate.directCalls.insert(target)
@@ -212,8 +233,6 @@ public enum RE4MachO32InitializerAudit {
                     continue
                 }
 
-                // Conditional B has both taken and fall-through paths. This bounded linear parser
-                // records the un-followed edge and continues only along fall-through.
                 if condition != 0xE {
                     aggregate.unresolvedTransfers.insert(
                         String(format: "conditional B%X at 0x%08X -> 0x%08X (not followed)", condition, pc, target)
@@ -221,35 +240,70 @@ public enum RE4MachO32InitializerAudit {
                     pc = pc &+ 4
                     continue
                 }
-                if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "UNCONDITIONAL_B" }
+
+                // Initializer veneers commonly use an unconditional B to enter a shared local
+                // helper. Follow that in-image edge as control flow, not as a function call.
+                if let imported = stubSymbolByAddress[target] {
+                    aggregate.importedSymbols.insert(imported)
+                    if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "TAIL_BRANCH_TO_IMPORT" }
+                    return
+                }
+                if containsExecutableWord(target, image: image) {
+                    pc = target
+                    continue
+                }
+                aggregate.unresolvedTransfers.insert(
+                    String(format: "unconditional B outside image at 0x%08X -> 0x%08X", pc, target)
+                )
+                if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "UNRESOLVED_UNCONDITIONAL_B" }
                 return
             }
 
-            // LDM with PC in the register list transfers through stack data; stack contents are unknown.
+            // LDM with PC in the register list transfers through stack data. Only an
+            // unconditional form is treated as a definite exit; conditional forms fall through too.
             if ((word >> 25) & 7) == 4,
                word & (1 << 20) != 0,
                word & (1 << 15) != 0 {
+                if condition != 0xE {
+                    aggregate.unresolvedTransfers.insert(
+                        String(format: "conditional LDM-to-PC%X at 0x%08X (return path not followed)", condition, pc)
+                    )
+                    pc = pc &+ 4
+                    continue
+                }
                 if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "LDM_PC_TRANSFER" }
                 return
             }
 
             // An unconditional word LDR into PC is an indirect transfer. Do not follow provider code.
-            if (word >> 28) == 0xE,
-               ((word >> 26) & 3) == 1,
+            if ((word >> 26) & 3) == 1,
                word & (1 << 20) != 0,
                word & (1 << 22) == 0,
                ((word >> 12) & 0xF) == 15 {
+                if condition != 0xE {
+                    aggregate.unresolvedTransfers.insert(
+                        String(format: "conditional LDR-to-PC%X at 0x%08X (alternate path not followed)", condition, pc)
+                    )
+                    pc = pc &+ 4
+                    continue
+                }
                 aggregate.unresolvedTransfers.insert(String(format: "LDR pc indirect transfer at 0x%08X", pc))
                 if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "INDIRECT_LDR_PC" }
                 return
             }
 
             // MOV pc, lr is a common return sequence.
-            if (word >> 28) == 0xE,
-               ((word >> 26) & 3) == 0,
+            if ((word >> 26) & 3) == 0,
                ((word >> 21) & 0xF) == 13,
                ((word >> 12) & 0xF) == 15,
                (word & 0xF) == 14 {
+                if condition != 0xE {
+                    aggregate.unresolvedTransfers.insert(
+                        String(format: "conditional MOV pc,lr%X at 0x%08X", condition, pc)
+                    )
+                    pc = pc &+ 4
+                    continue
+                }
                 if aggregate.returnBoundary == "NOT_REACHED" { aggregate.returnBoundary = "MOV_PC_LR" }
                 return
             }
@@ -273,9 +327,9 @@ public enum RE4MachO32InitializerAudit {
     public static func inspect(
         image: RE4MachO32Image,
         memory: RE4GuestMemoryReading,
-        maxInstructionsPerFunction: Int = 48,
+        maxInstructionsPerFunction: Int = 96,
         maxCallDepth: Int = 3,
-        totalInstructionBudgetPerInitializer: Int = 192
+        totalInstructionBudgetPerInitializer: Int = 512
     ) throws -> RE4MachO32InitializerAuditResult {
         let matches = image.segments.flatMap { segment in
             segment.sections.filter {
@@ -446,7 +500,7 @@ public enum RE4MachO32InitializerAudit {
         lines += [
             "",
             "[Interpretation limits]",
-            "The parser follows bounded direct ARM BL call edges and exact symbol-stub addresses only.",
+            "The parser follows bounded direct ARM BL calls, unconditional in-image B edges (including initializer veneers), and exact symbol-stub addresses only.",
             "It does not infer indirect calls, complete conditional control flow, function extents, data-dependent calls, or provider implementation readiness.",
             "Thumb initializer bodies are identified but not decoded because a Thumb instruction decoder is not part of this audit.",
             "A missing dependency in this report is not proof that the initializer has no such dependency.",
