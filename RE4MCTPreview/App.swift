@@ -854,7 +854,7 @@ struct ContentView: View {
                     case .picked(let url):
                         startStageILazyPointerApply(from: url)
                     case .failed(let message):
-                        stageILazyPointerApplyMessage = "Stage I-C 計畫選取失敗：\\(message)"
+                        stageILazyPointerApplyMessage = "Stage I-C 計畫選取失敗：\(message)"
                     case .cancelled:
                         stageILazyPointerApplyMessage = "已取消 Stage I-C 計畫選取；Stage H 與原始 Guest Memory 均未修改。"
                     }
@@ -1222,7 +1222,7 @@ struct ContentView: View {
             stageILazyPointerApplyCSV = ""
             stageILazyPointerImageData = nil
             stageILazyPointerApplyMessage =
-                "已選取：\\(url.lastPathComponent)\\n正在建立獨立 Stage I-D Guest Memory，Stage H source 將保持唯讀…"
+                "已選取：\(url.lastPathComponent)\n正在建立獨立 Stage I-D Guest Memory，Stage H source 將保持唯讀…"
 
             let relocationTargets = stageGRelocationTargetAddresses
             let stageHReadback = stageHImportApplyCSV
@@ -1247,7 +1247,7 @@ struct ContentView: View {
                     DispatchQueue.main.async {
                         stagedLazyPointerMemory = nil
                         stageILazyPointerApplyMessage =
-                            "Stage I-D isolated lazy pointer apply FAIL\\n\\(error.localizedDescription)\\nStage H source、Stage G source、原始 Guest Memory 與 IPA 均未被此流程寫入。"
+                            "Stage I-D isolated lazy pointer apply FAIL\n\(error.localizedDescription)\nStage H source、Stage G source、原始 Guest Memory 與 IPA 均未被此流程寫入。"
                         stageILazyPointerApplyCSV = ""
                         stageILazyPointerImageData = nil
                         isApplyingStageILazyPointers = false
@@ -1256,7 +1256,7 @@ struct ContentView: View {
             }
         } catch {
             stageILazyPointerApplyMessage =
-                "Stage I-C 計畫讀取失敗：\\(url.lastPathComponent)\\n\\(error.localizedDescription)"
+                "Stage I-C 計畫讀取失敗：\(url.lastPathComponent)\n\(error.localizedDescription)"
         }
     }
 
@@ -1268,7 +1268,7 @@ struct ContentView: View {
             try Data(stageILazyPointerApplyCSV.utf8).write(to: outputURL, options: .atomic)
             activeSheet = .shareTextReport(outputURL)
         } catch {
-            stageILazyPointerApplyMessage += "\\nCSV export failed: \\(error.localizedDescription)"
+            stageILazyPointerApplyMessage += "\nCSV export failed: \(error.localizedDescription)"
         }
     }
 
@@ -1280,7 +1280,7 @@ struct ContentView: View {
             try imageData.write(to: outputURL, options: .atomic)
             activeSheet = .shareTextReport(outputURL)
         } catch {
-            stageILazyPointerApplyMessage += "\\nImage export failed: \\(error.localizedDescription)"
+            stageILazyPointerApplyMessage += "\nImage export failed: \(error.localizedDescription)"
         }
     }
 
