@@ -180,6 +180,10 @@ public enum RE4IOS421LazyPointerStager {
                     quoted = true
                 case ",":
                     row.append(field); field = ""
+                case "\r\n":
+                    row.append(field); field = ""
+                    if !(row.count == 1 && row[0].isEmpty) { rows.append(row) }
+                    row = []
                 case "\r":
                     if i + 1 < chars.count && chars[i + 1] == "\n" { i += 1 }
                     row.append(field); field = ""
