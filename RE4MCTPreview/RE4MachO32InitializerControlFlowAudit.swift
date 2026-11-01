@@ -418,3 +418,145 @@ public enum RE4MachO32InitializerControlFlowAudit {
                    (word & 0xF) == 14 {
                     addEdge(&state, index: initializerIndex, function: bounds,
                             source: pc, target: nil, type: condition == 14 ? "return_mov_pc_lr" : "conditional_return_mov_pc_lr",
+                            condition: condText, path: condition == 14 ? item.path : .conditional)
+                    if condition == 14 { break }
+                    queue.append(WorkItem(pc: next, path: item.path))
+                    break
+                }
+                pc = next
+            }
+        }
+        state.callStack.remove(initialBounds.start)
+    }
+
+    private static func readULEB(_ bytes: [UInt8], cursor: inout Int, limit: Int) -> Int? {
+        var value: UInt64 = 0
+        var shift: UInt64 = 0
+        while cursor < limit && cursor < bytes.count && shift < 64 {
+            let byte = bytes[cursor]
+            cursor += 1
+            value |= UInt64(byte & 0x7F) << shift
+            if byte & 0x80 == 0 {
+                guard value <= UInt64(Int.max) else { return nil }
+                return Int(value)
+            }
+            shift += 7
+        }
+        return nil
+    }
+
+    /// Old SJLJ personalities consume call-site rows as ULEB128 (landing-pad, action) pairs.
+    /// Header encodings are retained for audit, but do not change the SJLJ pair decoding here.
+    private static func parseSJLJCallSiteTable(_ bytes: [UInt8]) -> (encoding: UInt8, rows: [CallSiteRecord])? {
+        guard bytes.count >= 4 else { return nil }
+        var cursor = 0
+        let lpStartEncoding = bytes[cursor]; cursor += 1
+        guard lpStartEncoding == 0xFF else { return nil }
+        let typeEncoding = bytes[cursor]; cursor += 1
+        if typeEncoding != 0xFF {
+            guard readULEB(bytes, cursor: &cursor, limit: bytes.count) != nil else { return nil }
+        }
+        guard cursor < bytes.count else { return nil }
+        let encoding = bytes[cursor]; cursor += 1
+        guard let tableLength = readULEB(bytes, cursor: &cursor, limit: bytes.count),
+              tableLength >= 0, cursor + tableLength <= bytes.count else { return nil }
+        let tableEnd = cursor + tableLength
+        var rows: [CallSiteRecord] = []
+        while cursor < tableEnd {
+            guard let landingPad = readULEB(bytes, cursor: &cursor, limit: tableEnd),
+                  let action = readULEB(bytes, cursor: &cursor, limit: tableEnd) else { return nil }
+            rows.append(CallSiteRecord(tableIndex: rows.count + 1,
+                                       landingPadIndex: landingPad + 1,
+                                       action: action))
+        }
+        guard cursor == tableEnd else { return nil }
+        return (encoding, rows)
+    }
+
+    private static func decodeARMImmediate(_ word: UInt32) -> UInt32 {
+        let imm8 = word & 0xFF
+        let rotate = ((word >> 8) & 0xF) * 2
+        return rotate == 0 ? imm8 : (imm8 >> rotate) | (imm8 << (32 - rotate))
+    }
+
+    private static func ldrLiteral(_ word: UInt32, pc: UInt32) -> (register: UInt32, literal: UInt32)? {
+        guard ((word >> 26) & 3) == 1,
+              word & (1 << 24) != 0, word & (1 << 21) == 0,
+              word & (1 << 20) != 0, word & (1 << 22) == 0,
+              ((word >> 16) & 0xF) == 15 else { return nil }
+        let offset = word & 0xFFF
+        let base = UInt64(pc) + 8
+        let address = (word & (1 << 23)) != 0 ? base + UInt64(offset) : base - UInt64(offset)
+        guard address <= UInt64(UInt32.max) else { return nil }
+        return (((word >> 12) & 0xF), UInt32(address))
+    }
+
+    private static func addPCRegister(_ word: UInt32, pc: UInt32) -> (destination: UInt32, source: UInt32)? {
+        guard ((word >> 26) & 3) == 0,
+              word & (1 << 25) == 0,
+              ((word >> 21) & 0xF) == 4,
+              ((word >> 16) & 0xF) == 15,
+              ((word >> 12) & 0xF) == (word & 0xF),
+              ((word >> 4) & 0xFF) == 0 else { return nil }
+        let reg = word & 0xF
+        let destination = (word >> 12) & 0xF
+        _ = pc
+        return (destination, reg)
+    }
+
+    private static func findLSDA(in bounds: FunctionBounds,
+                                 before registration: UInt32,
+                                 image: RE4MachO32Image,
+                                 memory: RE4GuestMemoryReading) throws -> UInt32? {
+        guard let section = exceptSection(image) else { return nil }
+        let sectionStart = UInt64(section.address)
+        let sectionEnd = sectionStart + UInt64(section.size)
+        var literalRegisters: [UInt32: UInt32] = [:]
+        var resolved: UInt32?
+        var pc = bounds.start
+        while pc < registration && pc < bounds.end {
+            let word = try readWord(pc, memory: memory)
+            if let ldr = ldrLiteral(word, pc: pc) {
+                if ldr.literal >= bounds.start && UInt64(ldr.literal) + 4 <= UInt64(bounds.end) {
+                    let literalValue = try readWord(ldr.literal, memory: memory)
+                    literalRegisters[ldr.register] = literalValue
+                }
+            } else if let add = addPCRegister(word, pc: pc),
+                      let displacement = literalRegisters[add.source] {
+                let value = UInt64(pc) + 8 + UInt64(displacement)
+                if value >= sectionStart && value < sectionEnd && value <= UInt64(UInt32.max) {
+                    resolved = UInt32(value)
+                }
+            }
+            pc &+= 4
+        }
+        return resolved
+    }
+
+    private static func isAddR0SPImmediate(_ word: UInt32) -> UInt32? {
+        guard ((word >> 26) & 3) == 0,
+              word & (1 << 25) != 0,
+              ((word >> 21) & 0xF) == 4,
+              ((word >> 16) & 0xF) == 13,
+              ((word >> 12) & 0xF) == 0 else { return nil }
+        return decodeARMImmediate(word)
+    }
+
+    private static func strSPImmediate(_ word: UInt32) -> (register: UInt32, offset: UInt32)? {
+        guard ((word >> 26) & 3) == 1,
+              word & (1 << 24) != 0,
+              word & (1 << 21) == 0,
+              word & (1 << 20) == 0,
+              word & (1 << 22) == 0,
+              ((word >> 16) & 0xF) == 13 else { return nil }
+        let immediate = word & 0xFFF
+        let offset = word & (1 << 23) != 0 ? immediate : (0 &- immediate)
+        return ((word >> 12) & 0xF, offset)
+    }
+
+    private static func immediateDataOp(_ word: UInt32) -> (opcode: UInt32, rn: UInt32, rd: UInt32, value: UInt32)? {
+        guard ((word >> 26) & 3) == 0, word & (1 << 25) != 0 else { return nil }
+        return (((word >> 21) & 0xF), ((word >> 16) & 0xF),
+                ((word >> 12) & 0xF), decodeARMImmediate(word))
+    }
+
