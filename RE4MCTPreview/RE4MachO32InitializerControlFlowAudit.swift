@@ -702,3 +702,143 @@ public enum RE4MachO32InitializerControlFlowAudit {
             pc &+= 4
         }
         return result
+        }
+        return result
+    }
+
+    private static func csv(_ value: String) -> String {
+        if value.contains(",") || value.contains("\"") || value.contains("\n") || value.contains("\r") {
+            return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        }
+        return value
+    }
+
+    public static func inspect(
+        image: RE4MachO32Image,
+        memory: RE4GuestMemoryReading,
+        maxInstructionsPerInitializer: Int = 4096,
+        maxCallDepth: Int = 3
+    ) throws -> RE4MachO32InitializerControlFlowAuditResult {
+        let initSections = image.segments.flatMap { segment in
+            segment.sections.filter {
+                $0.segmentName == "__DATA" && $0.name == "__mod_init_func" && $0.type == 9
+            }
+        }
+        guard initSections.count == 1, let section = initSections.first else {
+            throw AuditError.initializerSectionMissing
+        }
+        guard section.address & 3 == 0, section.size > 0, section.size & 3 == 0,
+              UInt64(section.size) / 4 <= 4096,
+              let (_, text) = textSection(image),
+              let eh = exceptSection(image) else {
+            throw AuditError.malformed("initializer/text/exception-table sections are missing or malformed")
+        }
+        let stubs = stubSymbols(image)
+        let functionSymbolRanges = functionSymbols(image)
+        let count = Int(section.size / 4)
+        var dependencyLines = ["Initializer_Index,Initializer_Slot_VA,Initializer_Target_VA,Initializer_Label,Functions_Visited,Normal_Imports,Normal_Call_Sites,Conditional_Imports,Conditional_Call_Sites,Exception_Cleanup_Imports,Exception_Cleanup_Call_Sites,LSDA_Functions,LSDA_Callsites,Matched_SJLJ_Callsites,CFG_Instructions,Max_Call_Depth,Unresolved_Count,Worklist_Budget_Reached,Guest_Execution"]
+        var edgeLines = ["Initializer_Index,Function_Symbol,Source_VA,Target_VA,Edge_Type,Condition,Path,Detail"]
+        var crosswalkLines = ["Initializer_Index,Function_Symbol,LSDA_VA,Table_Row,Callsite_Dispatch_Index,Action,Matched_Call_VA,Imported_Symbol,Match_Status"]
+        var report = [
+            "Stage J.1 — Control-Flow & SJLJ Landing-Pad Audit (read-only)",
+            "Initializer section: __DATA,__mod_init_func (S_MOD_INIT_FUNC_POINTERS)",
+            String(format: "Initializer section VA: 0x%08X; entries: %d", section.address, count),
+            String(format: "__text VA: 0x%08X; size: 0x%X", text.address, text.size),
+            String(format: "__gcc_except_tab VA: 0x%08X; size: 0x%X", eh.address, eh.size),
+            "Control-flow: conditional direct B explores taken and fallthrough successors using a bounded worklist.",
+            "Path categories: normal, conditional/alternative, and separately identified exception-cleanup blocks.",
+            "No ARM/Thumb instruction, initializer, constructor, dyld helper, personality routine, unwinder, or landing pad was executed.",
+            ""
+        ]
+        var totals: [String: Set<DependencySite>] = [
+            "normal": [], "conditional": [], "exception_cleanup": []
+        ]
+        var sjljFunctionCount = 0
+        var sjljRowsCount = 0
+        var sjljMatchesCount = 0
+        var budgetCount = 0
+        var edgeCount = 0
+
+        for index in 0..<count {
+            let slot = section.address &+ UInt32(index * 4)
+            let raw = try readWord(slot, memory: memory)
+            let transition = RE4ARMv6InstructionSetState.resolveBX(from: .arm, registerTarget: raw)
+            let target = transition.targetAddress
+            var state = InitializerState()
+            state.functionSymbolRanges = functionSymbolRanges
+            if transition.targetState == .arm, inText(target, image),
+               let bounds = functionBounds(at: target, image: image, symbols: functionSymbolRanges) {
+                try scanFunction(at: target, path: .normal, depth: 0,
+                                 initializerIndex: index + 1, image: image,
+                                 memory: memory, stubs: stubs,
+                                 maxDepth: max(0, min(maxCallDepth, 8)),
+                                 maxInstructions: max(1, min(maxInstructionsPerInitializer, 16384)),
+                                 state: &state)
+                // Resolve all SJLJ-registered functions reached by this initializer's bounded CFG.
+                var sjljResults: [SJLJFunctionResult] = []
+                for function in state.functions.values.sorted(by: { $0.start < $1.start }) {
+                    if let result = try findSJLJ(function, image: image, memory: memory, stubs: stubs) {
+                        sjljResults.append(result)
+                        state.dependencies.formUnion(result.cleanupImports)
+                    }
+                }
+                let normal = state.dependencies.filter { $0.path == .normal }
+                let conditional = state.dependencies.filter { $0.path == .conditional }
+                let exceptional = state.dependencies.filter { $0.path == .exceptionCleanup }
+                totals["normal", default: []].formUnion(normal)
+                totals["conditional", default: []].formUnion(conditional)
+                totals["exception_cleanup", default: []].formUnion(exceptional)
+                if state.budgetReached { budgetCount += 1 }
+                sjljFunctionCount += sjljResults.count
+                sjljRowsCount += sjljResults.reduce(0) { $0 + $1.table.count }
+                sjljMatchesCount += sjljResults.reduce(0) { $0 + $1.matches.count }
+                edgeCount += state.edges.count
+
+                let importedList: (Set<DependencySite>) -> String = { sites in
+                    Dictionary(grouping: sites, by: \.symbol).keys.sorted().map { name in
+                        let count = sites.filter { $0.symbol == name }.count
+                        return "\(name) x\(count)"
+                    }.joined(separator: ";")
+                }
+                let allNormal = Set(normal), allConditional = Set(conditional), allExceptional = Set(exceptional)
+                let labels = bounds.symbol
+                let dependencyCells: [String] = [
+                    String(index + 1),
+                    String(format: "0x%08X", slot),
+                    String(format: "0x%08X", target),
+                    csv(labels),
+                    String(state.functions.count),
+                    csv(importedList(allNormal)),
+                    String(allNormal.count),
+                    csv(importedList(allConditional)),
+                    String(allConditional.count),
+                    csv(importedList(allExceptional)),
+                    String(allExceptional.count),
+                    String(sjljResults.count),
+                    String(sjljResults.reduce(0) { $0 + $1.table.count }),
+                    String(sjljResults.reduce(0) { $0 + $1.matches.count }),
+                    String(state.instructionCount),
+                    String(state.maxDepthReached),
+                    String(state.unresolved.count),
+                    state.budgetReached ? "YES" : "NO",
+                    "NO"
+                ]
+                dependencyLines.append(dependencyCells.joined(separator: ","))
+
+                for edge in state.edges {
+                    edgeLines.append([
+                        String(edge.initializerIndex), csv(edge.functionSymbol),
+                        String(format: "0x%08X", edge.source),
+                        edge.target.map { String(format: "0x%08X", $0) } ?? "",
+                        edge.edgeType, edge.condition, edge.path.rawValue, csv(edge.detail)
+                    ].joined(separator: ","))
+                }
+                for result in sjljResults {
+                    let matchByIndex = Dictionary(result.matches.map { ($0.callSiteIndex, $0) },
+                                                  uniquingKeysWith: { first, _ in first })
+                    for row in result.table {
+                        let match = matchByIndex[row.landingPadIndex]
+                        crosswalkLines.append([
+                            String(index + 1), csv(result.function.symbol),
+                            result.lsdaAddress.map { String(format: "0x%08X", $0) } ?? "",
+                            String(row.tableIndex), String(row.landingPadIndex), String(row.action),
