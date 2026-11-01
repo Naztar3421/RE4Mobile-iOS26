@@ -732,7 +732,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
         let stubs = stubSymbols(image)
         let functionSymbolRanges = functionSymbols(image)
         let count = Int(section.size / 4)
-        var dependencyLines = ["Initializer_Index,Initializer_Slot_VA,Initializer_Target_VA,Initializer_Label,Functions_Visited,Normal_Imports,Normal_Call_Sites,Conditional_Imports,Conditional_Call_Sites,Exception_Cleanup_Imports,Exception_Cleanup_Call_Sites,LSDA_Functions,LSDA_Callsites,Matched_SJLJ_Callsites,CFG_Instructions,Max_Call_Depth,Unresolved_Count,Worklist_Budget_Reached,Guest_Execution"]
+        var dependencyLines = ["Initializer_Index,Initializer_Slot_VA,Initializer_Target_VA,Initializer_Label,Functions_Visited,Normal_Imports,Normal_Call_Sites,Conditional_Imports,Conditional_Call_Sites,Exception_Cleanup_Imports,Exception_Cleanup_Call_Sites,LSDA_Functions,LSDA_Callsites,Matched_SJLJ_Callsites,Matched_SJLJ_Table_Rows,Unmatched_SJLJ_Table_Rows,Duplicate_SJLJ_Indices,CFG_Instructions,Max_Call_Depth,Unresolved_Count,Worklist_Budget_Reached,Guest_Execution"]
         var edgeLines = ["Initializer_Index,Function_Symbol,Source_VA,Target_VA,Edge_Type,Condition,Path,Detail"]
         var crosswalkLines = ["Initializer_Index,Function_Symbol,LSDA_VA,LSDA_Table_Row,LandingPad_Dispatch_Index,Action,Matched_Call_VAs,Imported_Symbols,Match_Status"]
         var report = [
