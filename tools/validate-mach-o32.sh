@@ -12,6 +12,8 @@ swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32HLEBinder.swift" \
        "$ROOT/RE4MCTPreview/RE4CXXRuntimeLifecycleModel.swift" \
        "$ROOT/RE4MCTPreview/RE4AppleIOS421CXXABIProviderModel.swift" \
+       "$ROOT/RE4MCTPreview/RE4StageJ4ProviderRegressionModel.swift" \
+       "$ROOT/RE4MCTPreview/RE4StageJ4ProviderRegressionTests.swift" \
        "$ROOT/RE4MCTPreview/RE4ARMv6EntryPreflight.swift" \
        "$ROOT/RE4MCTPreview/RE4ARMv6InstructionSetState.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32InitializerAudit.swift" \
@@ -24,4 +26,4 @@ swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
        "$ROOT/RE4MCTPreview/RE4IOS421LazyPointerStager.swift" \
        "$ROOT/tools/test-mach-o32.swift" \
        -o "$TMP/macho32-test"
-"$TMP/macho32-test"
+"$TMP/macho32-test" "$ROOT/tools/fixtures/RE4_Res4_CXA_J4_240_Registration_Fixture.csv"

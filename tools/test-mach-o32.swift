@@ -19,6 +19,8 @@ enum MachO32ParserTest {
             print("")
             print(try RE4AppleIOS421IOSBaseInitModel.runSyntheticSelfTest())
             print("")
+            print(try RE4StageJ4ProviderRegressionTests.run(fixtureURL: URL(fileURLWithPath: CommandLine.arguments[1])))
+            print("")
             print(try RE4LibstdcxxIOSBaseInitModel.runSyntheticSelfTest())
             print("")
             print(try RE4ARMv6EntryPreflight.runSyntheticSelfTest())
