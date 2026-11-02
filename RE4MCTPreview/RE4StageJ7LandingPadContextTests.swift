@@ -158,7 +158,7 @@ public enum RE4StageJ7LandingPadContextTests {
         lines.append("RESULT: \(passed)/\(passed + failed) passed; \(failed) failed")
         lines.append("SCOPE: pinned static evidence plus host-only data model. No target function, personality, unwinder, pthread TSD, landing pad, ARM instruction, Guest Memory or CPU context was executed or modified.")
         lines.append("LIMIT: #101 cleanup-only profile only. The model resolves the saved cleanup continuation (0x55A8), not a generic LSDA landing-pad address; it does not install the context or perform BX.")
-        if failed != 0 { throw Failure(lines.joined(separator: "\n")) }
+        if failed != 0 { throw Failure(description: lines.joined(separator: "\n")) }
         return lines.joined(separator: "\n")
     }
 }
