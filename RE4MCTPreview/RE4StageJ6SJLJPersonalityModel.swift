@@ -386,14 +386,13 @@ public final class RE4StageJ6SJLJStateMachine {
         frames[threadID]?[address]
     }
 
-#if RE4_HOST_TESTING
-    /// Test-only fault injection: remove one synthetic frame record without
-    /// repairing links that point to it, so phase-2 can exercise corrupt-chain handling.
+    /// Test-only fault injection for this host-side synthetic registry. It removes
+    /// a synthetic frame record without repairing predecessor links, allowing
+    /// tests to exercise corrupt-chain handling. It never touches Guest Memory.
     @discardableResult
     public func removeFrameRecordForTesting(threadID: UInt64, address: UInt32) -> Bool {
         frames[threadID]?.removeValue(forKey: address) != nil
     }
-#endif
 
     /// Host-only record of the #101 cleanup trampoline's frame+4 = 0xFFFFFFFF write.
     @discardableResult
