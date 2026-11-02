@@ -144,6 +144,7 @@ public enum RE4StageJ84SJLJResumeChainTests {
             }, matching: { if case .handlerAddressIsNotHandler(f.middleOuter) = $0 { return true }; return false },
                message: "registered intermediate frame is not a handler")
         }
+#if RE4_HOST_TESTING
         runner.test("13 missing intermediate frame record is reported as corrupt chain") {
             let f = try makeFixture(env: env, row: 16)
             try runner.check(f.machine.removeFrameRecordForTesting(threadID: 1, address: f.middleOuter),
@@ -155,6 +156,7 @@ public enum RE4StageJ84SJLJResumeChainTests {
             }, matching: { if case .corruptFrameChain(f.middleOuter) = $0 { return true }; return false },
                message: "dangling predecessor must not be silently skipped")
         }
+#endif
         runner.test("14 mismatched J.8.2/J.7 frame contract is rejected before sentinel mutation") {
             let f = try makeFixture(env: env, row: 9)
             let badPlan = RE4StageJ6ContextInstallPlan(
