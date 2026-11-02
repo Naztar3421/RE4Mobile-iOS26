@@ -440,8 +440,9 @@ public final class RE4StageJ6SJLJStateMachine {
     }
 
     /// Normal phase 2: reason/action=2 for ordinary frames, 6 for the handler frame.
-    /// A returned install request unlinks the frame (provider behavior) but never
-    /// branches to the target PC; the unresolved target is carried in the plan.
+    /// On INSTALL_CONTEXT, the pinned provider retains the current frame at TSD top,
+    /// then restores the saved context and branches to the continuation. This host
+    /// model records the context plan only; it does not restore registers or transfer control.
     public func phase2(threadID: UInt64, handlerFrame: UInt32) -> RE4StageJ6Phase2Result {
         var cursor = tops[threadID] ?? 0
         var visits: [RE4StageJ6Phase2Visit] = []
