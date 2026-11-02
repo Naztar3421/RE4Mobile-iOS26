@@ -167,7 +167,7 @@ public enum RE4StageJ82SJLJContextBridgeTests {
             try runner.expect({
                 _ = try RE4StageJ82SJLJContextBridge.makeHandoff(from: result,
                     exceptionPointer: 1, finalTSDTopAddress: 0x7100, j7Model: env.j7)
-            }, matching: { if case .unresolvedPhase2(0x7100, 21) = $0 { return true }; return false },
+            }, matching: { if case .unresolvedPhase2(let frame, let ip) = $0 { return frame == 0x7100 && ip == 21 }; return false },
                message: "unresolved callSiteIP=21")
         }
         runner.test("J8.2-13 #101 selected as handler frame is not misclassified as ordinary cleanup") {
