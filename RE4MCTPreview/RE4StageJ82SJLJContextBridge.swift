@@ -47,7 +47,7 @@ public enum RE4StageJ82BridgeError: Error, CustomStringConvertible {
         case .controlTransferAlreadyPerformed:
             return "J.6 plan claims that control transfer was already performed."
         case .unresolvedPhase2(let frame, let ip):
-            return "J.6 phase 2 is unresolved at frame \(frame.map { String(format: "0x%08X", $0) } ?? "unknown"), callSiteIP \(ip.map(String.init) ?? "unknown")."
+            return "J.6 phase 2 is unresolved at frame \(frame.map { String(format: "0x%08X", $0) } ?? "unknown"), callSiteIP \(ip.map { String($0) } ?? "unknown")."
         case .bridgeInvariant(let field):
             return "J.8.2 bridge invariant failed: \(field)."
         }
