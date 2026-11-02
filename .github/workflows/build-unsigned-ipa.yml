@@ -35,6 +35,8 @@ jobs:
         run: bash tools/validate-stage-j7.sh
       - name: Validate Stage J.8 ARMv6 synthetic context-restore regressions
         run: bash tools/validate-stage-j8.sh
+      - name: Validate Stage J.8.1 synthetic context integrity regressions
+        run: bash tools/validate-stage-j8-1.sh
       - name: Build unsigned app
         run: |
           set -o pipefail
