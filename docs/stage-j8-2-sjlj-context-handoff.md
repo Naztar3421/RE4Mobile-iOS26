@@ -2,7 +2,7 @@
 
 **Target profile:** Res4 initializer #101, iOS 4.2.1 / 8C148 ARMv6  
 **Parent stages:** J.6 SJLJ/personality model, J.7 static cleanup-context reconstruction, J.8 synthetic frame harness, J.8.1 strict integrity guard  
-**Result:** 27/27 supplemental host tests passed (expected on local Swift validation before CI).
+**Status:** 27 supplemental host tests are implemented; results are pending the GitHub Actions run linked from the commit.
 
 ## Purpose
 
@@ -40,7 +40,7 @@ A separate forced-cleanup test supplies a host closure as the synthetic stop cal
 
 ## Test coverage
 
-The 27 supplemental host tests cover:
+The 27 supplemental host test cases cover:
 
 1. Normal multi-frame phase-2 traversal and selection of the #101 frame.
 2. J.6/J.7 agreement for frame address, saved R7/SP, row, selector/index and cleanup PC.
@@ -53,11 +53,11 @@ The 27 supplemental host tests cover:
 9. Rejection of row/index mismatch, missing row/index, invalid row range, invalid frame address, wrong saved PC, wrong landing PC, missing TSD retention and claimed control transfer.
 10. Explicit no-control-transfer result.
 
-## Results and limits
+## Execution status and limits
 
-This test runner is integrated separately as \`tools/validate-stage-j8-2.sh\`. It reuses the existing J.6 LSDA hex, J.7 frame evidence and J.1 LSDA crosswalk fixtures.
+The test runner is integrated separately as \`tools/validate-stage-j8-2.sh\`. It reuses the existing J.6 LSDA hex, J.7 frame evidence and J.1 LSDA crosswalk fixtures.
 
-The phase-2 machine remains a host synthetic model. Its frame addresses and SP/R7 values are chosen by tests. The bridge does not prove live TSD contents, live stack alignment, actual register values, memory mappings, or executable target permissions. The exception pointer is supplied independently because it is absent from the J.6 plan.
+The test cases are authored but are not reported as passed until the remote runner finishes. The phase-2 machine remains a host synthetic model. Its frame addresses and SP/R7 values are chosen by tests. The bridge does not prove live TSD contents, live stack alignment, actual register values, memory mappings, or executable target permissions. The exception pointer is supplied independently because it is absent from the J.6 plan.
 
 No Guest instruction, CPU context restore, real branch, personality, unwinder, raw function pointer, pthread TSD, or Guest Memory operation is performed.
 
