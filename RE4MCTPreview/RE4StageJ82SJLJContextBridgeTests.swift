@@ -91,7 +91,7 @@ public enum RE4StageJ82SJLJContextBridgeTests {
                 expected: RE4StageJ8IntegrityExpectedFields(plan: h.j7Plan))
             try runner.check(snapshot.frameBaseAddress == h.phase2Plan.frameAddress &&
                              snapshot.selectorWord == 8 && snapshot.unwindGR0 == 0x13579BDF &&
-                             snapshot.restoredPC == 0x55A8 && snapshot.targetState == .arm &&
+                             snapshot.rawBXOperand == 0x55A8 && snapshot.targetState == .arm &&
                              !snapshot.controlTransferPerformed,
                              "end-to-end synthetic handoff snapshot mismatch")
         }
@@ -217,14 +217,14 @@ public enum RE4StageJ82SJLJContextBridgeTests {
         }
         runner.test("J8.2-19 missing landing-pad row is rejected") {
             let g = try generated()
-            let invalid = replacePlan(try installPlan(g.result), row: nil)
+            let invalid = replacePlan(try installPlan(g.result), clearRow: true)
             try expectSyntheticPlan(invalid, visits: g.expectedVisitFrames, env: env,
                                     error: { if case .missingLSDArow = $0 { return true }; return false },
                                     message: "missing row")
         }
         runner.test("J8.2-20 missing landing-pad index is rejected") {
             let g = try generated()
-            let invalid = replacePlan(try installPlan(g.result), index: nil)
+            let invalid = replacePlan(try installPlan(g.result), clearIndex: true)
             try expectSyntheticPlan(invalid, visits: g.expectedVisitFrames, env: env,
                                     error: { if case .missingLandingPadIndex = $0 { return true }; return false },
                                     message: "missing index")
@@ -238,7 +238,7 @@ public enum RE4StageJ82SJLJContextBridgeTests {
         }
         runner.test("J8.2-22 landingPadPC must equal the audited 0x55A8") {
             let g = try generated()
-            let invalid = replacePlan(try installPlan(g.result), landingPC: nil)
+            let invalid = replacePlan(try installPlan(g.result), clearLandingPC: true)
             try expectSyntheticPlan(invalid, visits: g.expectedVisitFrames, env: env,
                                     error: { if case .landingPadMismatch(expected: 0x55A8, actual: nil) = $0 { return true }; return false },
                                     message: "missing landingPadPC")
@@ -355,20 +355,20 @@ public enum RE4StageJ82SJLJContextBridgeTests {
     private static func replacePlan(_ p: RE4StageJ6ContextInstallPlan,
                                     frameAddress: UInt32? = nil,
                                     action: RE4StageJ6UnwindActions? = nil,
-                                    row: Int?? = nil,
-                                    index: UInt32?? = nil,
+                                    row: Int? = nil, clearRow: Bool = false,
+                                    index: UInt32? = nil, clearIndex: Bool = false,
                                     savedPC: UInt32? = nil,
-                                    landingPC: UInt32?? = nil,
+                                    landingPC: UInt32? = nil, clearLandingPC: Bool = false,
                                     retained: Bool? = nil,
                                     transferred: Bool? = nil) -> RE4StageJ6ContextInstallPlan {
         RE4StageJ6ContextInstallPlan(
             frameAddress: frameAddress ?? p.frameAddress,
             action: action ?? p.action,
-            lsdaRow: row ?? p.lsdaRow,
-            landingPadIndex: index ?? p.landingPadIndex,
+            lsdaRow: clearRow ? nil : (row ?? p.lsdaRow),
+            landingPadIndex: clearIndex ? nil : (index ?? p.landingPadIndex),
             savedR7: p.savedR7, savedSP: p.savedSP,
             savedContinuationPC: savedPC ?? p.savedContinuationPC,
-            landingPadPC: landingPC ?? p.landingPadPC,
+            landingPadPC: clearLandingPC ? nil : (landingPC ?? p.landingPadPC),
             frameRetainedAtTSDTop: retained ?? p.frameRetainedAtTSDTop,
             controlTransferPerformed: transferred ?? p.controlTransferPerformed)
     }
