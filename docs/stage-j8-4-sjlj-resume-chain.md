@@ -41,7 +41,7 @@ The 16 host tests include:
 - A mismatched J.8.2/J.7 frame contract is rejected before sentinel mutation.
 - A forced Resume route (private_1 != 0) is rejected because J.8.4 covers only the normal route.
 
-The corruption hook is compiled only when RE4_HOST_TESTING is defined by the validation script; it is absent from normal app builds.
+The corruption hook is explicitly named ForTesting and mutates only the host-side synthetic frame registry; it never touches Guest Memory or a live runtime frame. It is included in the app target only as inert test-support code and is not called by application flows.
 
 ## Test coverage
 
