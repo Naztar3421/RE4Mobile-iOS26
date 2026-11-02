@@ -128,6 +128,8 @@ public enum RE4StageJ6SJLJPersonalityTests {
                       let restored = RE4StageJ6StaticContextHelpers.setIP(ip: ip) else { return false }
                 return restored == UInt32(selector)
             }, "GetIP/SetIP round trip mismatch")
+            try check(RE4StageJ6StaticContextHelpers.getIP(selectorRaw: UInt32.max) == 0,
+                      "the provider's 32-bit GetIP helper wraps the cleanup sentinel to zero")
             try check(RE4StageJ6StaticContextHelpers.regionStart == 0, "SJLJ region start must match provider helper")
             try check(RE4StageJ6StaticContextHelpers.generalRegisterWordOffset(registerNumber: 0) == 8 &&
                       RE4StageJ6StaticContextHelpers.generalRegisterWordOffset(registerNumber: 7) == 36 &&
@@ -196,7 +198,7 @@ public enum RE4StageJ6SJLJPersonalityTests {
             ]), "cleanup-only LSDA should not create a phase-1 handler")
             try check(ex.private1 == 0 && ex.private2 == 0, "end-of-stack must retain cleared private words")
         }
-        test("14 phase 2 installs cleanup metadata, unlinks frame, then resumes at outer handler") {
+        test("14 INSTALL_CONTEXT retains #101 frame; cleanup sentinel then Resume advances to handler") {
             let m = machineFactory()
             _ = try makeFrame(m, 0x1000, 0, .syntheticOuterHandler)
             _ = try makeFrame(m, 0x2000, 19, .extraProductListCleanupOnly)
@@ -208,17 +210,23 @@ public enum RE4StageJ6SJLJPersonalityTests {
             try check(plan.frameAddress == 0x2000 && plan.action == .ordinaryCleanup &&
                       plan.lsdaRow == 20 && plan.landingPadIndex == 19,
                       "#101 phase-2 plan mismatch")
-            try check(plan.landingPadPC == nil && !plan.controlTransferPerformed,
-                      "model must not invent or execute landing-pad PC")
-            try check(visits.first?.actions == .ordinaryCleanup && m.top(threadID: 1) == 0x1000,
-                      "phase 2 must unlink the cleanup frame before synthetic resume")
+            try check(plan.landingPadPC == 0x55A8 && plan.frameRetainedAtTSDTop &&
+                      !plan.controlTransferPerformed,
+                      "cleanup continuation must be metadata 0x55A8 and frame must remain TSD top")
+            try check(visits.first?.actions == .ordinaryCleanup && m.top(threadID: 1) == 0x2000,
+                      "INSTALL_CONTEXT must retain current frame")
+            let sentinel = try m.markCleanupContinuationComplete(threadID: 1, address: 0x2000)
+            try check(sentinel == UInt32.max && m.frame(threadID: 1, address: 0x2000)?.callSiteIP == 0,
+                      "cleanup trampoline sentinel must wrap GetIP to zero")
             let second = m.resume(threadID: 1, exception: ex)
             guard case .installContextPending(let handlerPlan, let handlerVisits) = second else {
                 throw TestFailure("expected synthetic outer handler install request on resumed phase 2")
             }
-            try check(handlerPlan.frameAddress == 0x1000 && handlerVisits.first?.actions == .handlerCleanup,
+            try check(handlerPlan.frameAddress == 0x1000 &&
+                      handlerVisits.contains(where: { $0.frameAddress == 0x1000 && $0.actions == .handlerCleanup }),
                       "selected handler frame must receive reason/action 6")
-            try check(m.top(threadID: 1) == 0, "synthetic handler frame should be unlinked after install request")
+            try check(handlerPlan.frameRetainedAtTSDTop && m.top(threadID: 1) == 0x1000,
+                      "second INSTALL_CONTEXT must retain selected handler frame")
         }
         test("15 CONTINUE_UNWIND at the selected handler frame is fatal phase-2 error") {
             let m = machineFactory()
@@ -250,8 +258,9 @@ public enum RE4StageJ6SJLJPersonalityTests {
                       "forced stop event mismatch")
             try check(plan.action == .forcedCleanup && plan.frameAddress == 0x4000,
                       "forced personality action must be 10")
-            try check(plan.landingPadPC == nil && m.top(threadID: 1) == 0,
-                      "forced plan must remain metadata-only and unlink frame")
+            try check(plan.landingPadPC == 0x55A8 && plan.frameRetainedAtTSDTop &&
+                      m.top(threadID: 1) == 0x4000,
+                      "forced INSTALL_CONTEXT must retain frame and expose only the bounded cleanup continuation")
         }
         test("18 forced stop callback nonzero aborts with fatal phase-2 error") {
             let m = machineFactory()

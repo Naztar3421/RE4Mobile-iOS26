@@ -1,0 +1,39 @@
+Evidence_ID,VA,Raw_Word,Observed_Value,Interpretation
+RES4_STACK_FRAME_ALLOCATION,0x00005198,0xE24DD060,0x00000060,subtract 0x60 from SP before SJLJ frame construction
+RES4_FRAME_BASE,0x000051A4,0xE28D0018,0x00000018,frame base = SP + 0x18
+RES4_LSDA_LITERAL_LOAD,0x000051B0,0xE59F347C,0x001BB7D2,literal read from VA 0x5634; architectural PC=0x51B8
+RES4_LSDA_ADD,0x000051BC,0xE08F3003,0x001C0996,architectural PC 0x51C4 + literal 0x001BB7D2
+RES4_LSDA_STORE,0x000051C0,0xE58D3034,0x0000001C,SP+0x34 = SJLJ frame+0x1C
+RES4_SAVED_R7_STORE,0x000051B8,0xE58D7038,0x00000020,SP+0x38 = SJLJ frame+0x20
+RES4_SAVED_SP_STORE,0x000051C8,0xE58DD040,0x00000028,SP+0x40 = SJLJ frame+0x28
+RES4_PC_LITERAL_LOAD,0x000051C4,0xE59F346C,0x000003D4,literal read from VA 0x5638; architectural PC=0x51CC
+RES4_PC_ADD,0x000051CC,0xE08F3003,0x000055A8,architectural PC 0x51D4 + literal 0x3D4
+RES4_SAVED_PC_STORE,0x000051D0,0xE58D303C,0x00000024,SP+0x3C = SJLJ frame+0x24
+PERSONALITY_ACTION_ACCUM_LOAD,0x374EFDE8,0xE59D3034,0x00000000,load #101 zero action accumulator
+PERSONALITY_ACTION_ACCUM_COMPARE,0x374EFDEC,0xE3530000,0x00000000,compare action accumulator with zero
+PERSONALITY_ZERO_ACTION_BRANCH,0x374EFDF0,0xAA00000A,0x374EFE20,BGE bypasses the context+0x24 overwrite block
+PERSONALITY_PC_OVERWRITE_BLOCK,0x374EFE1C,0xE5810024,SKIPPED,store to context+0x24 is not executed for #101 zero action
+PERSONALITY_SETGR0,0x374EFE34,0xEB000B34,0x374F2B0C,"stub resolves through indirect symbol table to __Unwind_SetGR; r1=0, r2=exception pointer"
+SETGR_IMPLEMENTATION,0x358CF6C0,0xE1A01101,0x00000008,"lsl r1,#2; add to context; store r2 at context+8+4*register"
+PERSONALITY_SETGR1,0x374EFE44,0xEB000B30,0x374F2B0C,__Unwind_SetGR with register 1 and zero action accumulator
+PERSONALITY_SETIP,0x374EFE50,0xEB000B31,0x374F2B1C,stub resolves to __Unwind_SetIP; input is parser-derived dispatch index
+SETIP_IMPLEMENTATION,0x358CF6F0,0xE2411001,0x00000004,subtract one then store at context+4; does not touch context+0x24
+PERSONALITY_INSTALL_CONTEXT,0x374EFE54,0xE3A02007,0x00000007,return code 7 = INSTALL_CONTEXT
+PHASE2_TSD_CURRENT_FRAME,0x358CF9C4,0xE1A01004,R1=R4,current frame pointer is passed as pthread_setspecific value
+PHASE2_PTHREAD_SET_SPECIFIC,0x358CF9CC,0xEB0000E2,0x358CFD5C,stub resolves to _pthread_setspecific
+PTHREAD_SET_SPECIFIC_STUB,0x358CFD5C,0xE59FC004,_pthread_setspecific,indirect symbol table entry maps stub to _pthread_setspecific
+PHASE2_RESTORE_R7,0x358CF9D0,0xE5947020,0x00000020,restore R7 from frame+0x20
+PHASE2_RESTORE_SP,0x358CF9D4,0xE594D028,0x00000028,restore SP from frame+0x28
+PHASE2_RESTORE_PC,0x358CF9D8,0xE5940024,0x00000024,load continuation PC from frame+0x24
+PHASE2_BRANCH_PC,0x358CF9DC,0xE12FFF10,BX R0,transfer target instruction uses saved continuation PC
+RES4_CLEANUP_ENTRY,0x000055A8,0xE59D2020,0x00000008,load [SP+0x20] = SJLJ frame+8 = GR0
+RES4_SAVE_EXCEPTION_PTR,0x000055AC,0xE58D2010,0x00000010,save GR0 exception pointer to local [SP+0x10]
+RES4_NORMAL_PATH_BRANCH,0x000055A4,0xEA00001A,0x00005614,normal path jumps around cleanup trampoline
+RES4_CLEAR_TOKEN_BEFORE_DTOR,0x000055F8,0xE58D301C,0x00000004,clear SJLJ selector at frame+4 before destructor call
+RES4_RESUME_LOAD_EXCEPTION,0x00005608,0xE59D0010,0x00000010,restore same exception pointer to R0 for Resume
+RES4_RESUME_SET_SENTINEL,0x0000560C,0xE58D301C,0x00000004,write 0xFFFFFFFF to SJLJ frame+4
+RES4_RESUME_CALL,0x00005610,0xEB0669B7,0x0019FCF4,BL stub for __Unwind_SjLj_Resume
+RES4_NORMAL_UNREGISTER,0x00005618,0xEB0669B8,0x0019FD00,normal completion calls __Unwind_SjLj_Unregister; exceptional path branches into cleanup at 0x55A8
+CALLSITE_SELECTOR_FIRST,0x00005234,0xE58D301C,0x00000014,"before first wide-string constructor, stores token 20 = selector 19 + 1"
+CALLSITE_SELECTOR_FIRST_COUNT,0x00005228,0xE3A03013,0x00000013,"r3=19, then +1 and store to frame+4"
+J1_CROSSWALK_HELPER,0x0000555C,N/A,ROW2,row 2 shares dispatch index with 0x5588; static correlation only

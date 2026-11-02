@@ -233,7 +233,7 @@ public struct RE4StageJ6SJLJFrame: Equatable {
     public let address: UInt32
     public let previousFrame: UInt32
     /// Raw word at frame+4; target __Unwind_GetIP returns this value + 1.
-    public let selectorRaw: UInt32
+    public var selectorRaw: UInt32
     public let personality: RE4StageJ6FramePersonality
     public let personalityRaw: UInt32
     public let lsdaRaw: UInt32
@@ -242,8 +242,8 @@ public struct RE4StageJ6SJLJFrame: Equatable {
     public let savedSP: UInt32
 
     public var callSiteIP: UInt32? {
-        let (value, overflow) = selectorRaw.addingReportingOverflow(1)
-        return overflow ? nil : value
+        // The pinned ARMv6 helper performs a 32-bit ADD; 0xFFFFFFFF wraps to zero.
+        selectorRaw &+ 1
     }
 }
 
@@ -317,6 +317,7 @@ public struct RE4StageJ6ContextInstallPlan: Equatable {
     public let savedSP: UInt32
     public let savedContinuationPC: UInt32
     public let landingPadPC: UInt32?
+    public let frameRetainedAtTSDTop: Bool
     public let controlTransferPerformed: Bool
 }
 
@@ -385,6 +386,18 @@ public final class RE4StageJ6SJLJStateMachine {
         frames[threadID]?[address]
     }
 
+    /// Host-only record of the #101 cleanup trampoline's frame+4 = 0xFFFFFFFF write.
+    @discardableResult
+    public func markCleanupContinuationComplete(threadID: UInt64, address: UInt32) throws -> UInt32 {
+        guard isActive(threadID: threadID, address: address),
+              var current = frames[threadID]?[address] else {
+            throw RE4StageJ6StateError.unknownActiveFrame(address)
+        }
+        current.selectorRaw = UInt32.max
+        frames[threadID]?[address] = current
+        return current.selectorRaw
+    }
+
     /// Mirrors __Unwind_SjLj_Unregister: TSD top becomes frame[0].
     @discardableResult
     public func unregister(threadID: UInt64, address: UInt32) throws -> UInt32 {
@@ -438,21 +451,24 @@ public final class RE4StageJ6SJLJStateMachine {
             }
             let actions: RE4StageJ6UnwindActions = current.address == handlerFrame
                 ? .handlerCleanup : .ordinaryCleanup
-            let decision = phase2Decision(for: current, actions: actions)
+            let decision: RE4StageJ6PersonalityDecision = current.callSiteIP == 0
+                ? .continueUnwind : phase2Decision(for: current, actions: actions)
             visits.append(RE4StageJ6Phase2Visit(frameAddress: cursor,
                                                actions: actions,
                                                decision: decision,
                                                stopCallbackReturn: nil))
             switch decision {
             case .installCleanupContext(let row, let index):
-                do { _ = try unregister(threadID: threadID, address: current.address) }
-                catch { return .fatalPhase2Error(frameAddress: current.address, visits: visits) }
+                // 8C148 _unwind_phase2 calls pthread_setspecific(key, currentFrame);
+                // INSTALL_CONTEXT does not unlink the current SJLJ frame.
+                tops[threadID] = current.address
                 let plan = RE4StageJ6ContextInstallPlan(
                     frameAddress: current.address, action: actions,
                     lsdaRow: row, landingPadIndex: index,
                     savedR7: current.savedR7, savedSP: current.savedSP,
                     savedContinuationPC: current.continuationPC,
-                    landingPadPC: nil, controlTransferPerformed: false)
+                    landingPadPC: current.personality == .extraProductListCleanupOnly ? 0x000055A8 : nil,
+                    frameRetainedAtTSDTop: true, controlTransferPerformed: false)
                 return .installContextPending(plan: plan, visits: visits)
             case .continueUnwind:
                 if current.address == handlerFrame {
@@ -494,21 +510,22 @@ public final class RE4StageJ6SJLJStateMachine {
                                                    stopCallbackReturn: stopResult))
                 return .fatalPhase2Error(frameAddress: current.address, visits: visits)
             }
-            let decision = phase2Decision(for: current, actions: .forcedCleanup)
+            let decision: RE4StageJ6PersonalityDecision = current.callSiteIP == 0
+                ? .continueUnwind : phase2Decision(for: current, actions: .forcedCleanup)
             visits.append(RE4StageJ6Phase2Visit(frameAddress: cursor,
                                                actions: .forcedCleanup,
                                                decision: decision,
                                                stopCallbackReturn: stopResult))
             switch decision {
             case .installCleanupContext(let row, let index):
-                do { _ = try unregister(threadID: threadID, address: current.address) }
-                catch { return .fatalPhase2Error(frameAddress: current.address, visits: visits) }
+                tops[threadID] = current.address
                 let plan = RE4StageJ6ContextInstallPlan(
                     frameAddress: current.address, action: .forcedCleanup,
                     lsdaRow: row, landingPadIndex: index,
                     savedR7: current.savedR7, savedSP: current.savedSP,
                     savedContinuationPC: current.continuationPC,
-                    landingPadPC: nil, controlTransferPerformed: false)
+                    landingPadPC: current.personality == .extraProductListCleanupOnly ? 0x000055A8 : nil,
+                    frameRetainedAtTSDTop: true, controlTransferPerformed: false)
                 return .installContextPending(plan: plan, visits: visits)
             case .continueUnwind:
                 cursor = current.previousFrame
@@ -603,8 +620,7 @@ public enum RE4StageJ6StaticContextHelpers {
 
     /// Pinned helper at 0x358CF6D0: load frame+4, then add one.
     public static func getIP(selectorRaw: UInt32) -> UInt32? {
-        let (value, overflow) = selectorRaw.addingReportingOverflow(1)
-        return overflow ? nil : value
+        selectorRaw &+ 1
     }
 
     /// Pinned helper at 0x358CF6F0: subtract one, then store at frame+4.

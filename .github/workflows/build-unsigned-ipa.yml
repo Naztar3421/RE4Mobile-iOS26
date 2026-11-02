@@ -31,6 +31,8 @@ jobs:
         run: bash tools/validate-mach-o32.sh
       - name: Validate Stage J.6 SJLJ/personality regressions
         run: bash tools/validate-stage-j6.sh
+      - name: Validate Stage J.7 landing-pad/context regressions
+        run: bash tools/validate-stage-j7.sh
       - name: Build unsigned app
         run: |
           set -o pipefail
