@@ -295,3 +295,15 @@ The iOS 4.2.1 libstdc++ provider model uses the observed atomic reference-count 
 - The provider-specific model does not add the sentinel reference assumed by the older GCC 3.4 reference profile. That historical model remains in the code only as a separate comparator and is not used as the target-provider result.
 
 These tests are host-only synthetic state/data validation. No provider function, Guest callback, ARM/Thumb instruction, initializer, or real standard I/O operation is executed. Guest Memory, IPA and shared-cache inputs are not modified. Runtime readiness remains NOT READY TO ENTER.
+
+
+## Stage J.9 — SJLJ evidence and readiness review
+
+The bounded Res4 ExtraProductList initializer #101 SJLJ path now has an integrated static-evidence and host-model review. The review covers the pinned personality/LSDA identity, frame/context mapping, normal Resume and Unregister distinction, multi-frame normal Resume, and the forced Resume state model.
+
+- Static profile gate: **PASS WITH RECORDED CROSSWALK LIMIT**. The 20-row LSDA has 19 distinct matched rows and 20 static code-site correlations; row 1 remains unmatched and row 2 has two static call sites.
+- Host-model gate: **PASS**. J.6 through J.8.5 run as separate CI validations; the latest integrated run is [#41498238621](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41498238621), which also built and packaged the unsigned preview IPA.
+- Executable SJLJ runtime gate: **BLOCKED**. The personality, unwinder, callbacks, live thread-local frame chain, destructor path and CPU context transfer have not been executed.
+- Global Guest Runtime entry gate: **NOT READY**. The bounded #101 model does not resolve the separate loader, import/provider, ARM/Thumb and process-lifecycle requirements.
+
+See [Stage J.9 integration review](docs/stage-j9-sjlj-integration-readiness.md) and [Stage J.9 readiness matrix](docs/stage-j9-sjlj-readiness-matrix.csv) for the full gate-by-gate distinction. A successful host test or unsigned app build is not evidence of a playable runtime.
