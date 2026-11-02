@@ -43,6 +43,8 @@ jobs:
         run: bash tools/validate-stage-j8-3.sh
       - name: Validate Stage J.8.4 multi-frame SJLJ Resume chain regressions
         run: bash tools/validate-stage-j8-4.sh
+      - name: Validate Stage J.8.5 forced SJLJ Resume completion regressions
+        run: bash tools/validate-stage-j8-5.sh
       - name: Build unsigned app
         run: |
           set -o pipefail
