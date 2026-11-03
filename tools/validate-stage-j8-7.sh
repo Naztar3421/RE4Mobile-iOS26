@@ -14,3 +14,6 @@ swiftc -parse-as-library -emit-module -module-name StageJ87ReleaseCompile \
   "$ROOT/RE4MCTPreview/RE4StageJ87ProviderABIModel.swift" \
   -emit-module-path "$TMP/StageJ87ReleaseCompile.swiftmodule"
 echo "RELEASE-MODE COMPILE: PASS"
+
+# Continue with the full provider TSD lifecycle and ARMv6 restore precondition audits.
+bash "$ROOT/tools/validate-stage-j8-8.sh"

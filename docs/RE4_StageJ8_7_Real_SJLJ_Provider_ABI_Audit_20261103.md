@@ -190,3 +190,12 @@ The callback record explicitly carries the raw callback token, version 1, action
 The TSD model separately represents key creation, Register, Unregister, forced traversal, InstallContext publication, end-of-stack return, and caller-side Unregister. The J.8.7 validator is now chained after J.8.6 in the existing CI validation path.
 
 CI result for this new implementation is pending at the time of this documentation update. No PASS is claimed until the workflow reports the J.8.7 test and Release compile steps successful.
+
+
+## J.8.7 completion and callback identity/lifetime boundary
+
+GitHub Actions run [#41620588181](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41620588181) completed successfully. The provider ABI/TSD suite reported 8/8 at the original checkpoint; the production-surface compile passed, followed by the unsigned iOS Release build and IPA upload. Artifact ID: 13223647808; uploaded ZIP SHA-256: b8d0f7dceb656fd17026825f29d8690bb0741081343e6f347ab87f010f4b0fbc.
+
+The follow-on lifetime ledger makes the callback boundary explicit. Across callbacks belonging to one modeled forced phase-2 invocation, the exception-object pointer and private_2 stop parameter are stable identities; the context pointer is a borrowed pointer to the current frame and is checked against the frame being visited, so it may change from callback to callback. This is an identity/argument-lifetime assertion only: it does not infer ownership, allocation, retain/release, deletion, or validity beyond the provider call. The expanded J.8.7 suite checks both stable exception/stop-parameter identity and per-frame context association.
+
+J.8.7 is host-only. No raw callback, exception runtime object, pthread API, provider function, Guest memory or CPU state is invoked.

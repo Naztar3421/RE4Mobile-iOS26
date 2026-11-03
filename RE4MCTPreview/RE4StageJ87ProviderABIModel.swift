@@ -10,6 +10,9 @@ public enum RE4StageJ87Error: Error, Equatable {
     case zeroExceptionPointer
     case zeroContextPointer
     case missingFrame(UInt32)
+    case exceptionPointerChanged(expected: UInt32, actual: UInt32)
+    case callbackContextMismatch(expectedFrame: UInt32, actualContext: UInt32)
+    case stopParameterChanged(expected: UInt32, actual: UInt32)
 }
 
 public struct RE4StageJ87StopCallbackInvocation: Equatable {
@@ -142,5 +145,43 @@ public final class RE4StageJ87SJLJTSDModel {
         }
         // Exact provider boundary: no pthread_setspecific(key, 0) on EOS.
         return .endOfStack(visited: visited, tsdTopAtReturn: top)
+    }
+}
+
+
+/// Non-owning identity ledger for one forced phase-2 invocation. The exception
+/// object and private_2 stop parameter remain stable across callbacks; the
+/// context pointer is borrowed from the current frame and may change per visit.
+/// This does not claim ownership, allocation, retention, deletion, or lifetime
+/// beyond the provider call boundary.
+public struct RE4StageJ87CallbackLifetimeLedger: Equatable {
+    public private(set) var exceptionObjectPointer: UInt32?
+    public private(set) var stopParameter: UInt32?
+    public private(set) var contextPointers: [UInt32] = []
+
+    public init() {}
+
+    public mutating func record(
+        _ invocation: RE4StageJ87StopCallbackInvocation,
+        expectedCurrentFrameAddress: UInt32
+    ) throws {
+        guard invocation.contextPointer == expectedCurrentFrameAddress else {
+            throw RE4StageJ87Error.callbackContextMismatch(
+                expectedFrame: expectedCurrentFrameAddress,
+                actualContext: invocation.contextPointer)
+        }
+        if let expected = exceptionObjectPointer, expected != invocation.exceptionObjectPointer {
+            throw RE4StageJ87Error.exceptionPointerChanged(
+                expected: expected, actual: invocation.exceptionObjectPointer)
+        } else {
+            exceptionObjectPointer = invocation.exceptionObjectPointer
+        }
+        if let expected = stopParameter, expected != invocation.stopParameter {
+            throw RE4StageJ87Error.stopParameterChanged(
+                expected: expected, actual: invocation.stopParameter)
+        } else {
+            stopParameter = invocation.stopParameter
+        }
+        contextPointers.append(invocation.contextPointer)
     }
 }

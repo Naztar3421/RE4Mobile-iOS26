@@ -96,7 +96,42 @@ struct StageJ87ProviderABITests {
                       "caller-side Unregister was not modeled separately")
         }
 
-        print("RESULT: \(passed)/8 passed; 0 failed")
+
+        try test("09 exception object and stop parameter stay stable while context follows each frame") {
+            let ex = RE4StageJ6SJLJException(exceptionClassLow:0x11223344,
+                exceptionClassHigh:0x55667788, private1:0x358CFABC, private2:0xCAFEBABE)
+            var ledger = RE4StageJ87CallbackLifetimeLedger()
+            let first = try RE4StageJ87StopCallbackInvocation.make(
+                exception:ex, exceptionPointer:0xA0F00000, contextPointer:0x7100)
+            let second = try RE4StageJ87StopCallbackInvocation.make(
+                exception:ex, exceptionPointer:0xA0F00000, contextPointer:0x7200)
+            try ledger.record(first, expectedCurrentFrameAddress:0x7100)
+            try ledger.record(second, expectedCurrentFrameAddress:0x7200)
+            try check(ledger.exceptionObjectPointer == 0xA0F00000 &&
+                      ledger.stopParameter == 0xCAFEBABE &&
+                      ledger.contextPointers == [0x7100,0x7200],
+                      "exception identity/stop parameter/context borrow trace mismatch")
+        }
+
+        try test("10 changed exception pointer or wrong current-frame context is rejected") {
+            let ex = RE4StageJ6SJLJException(private1:1, private2:2)
+            var ledger = RE4StageJ87CallbackLifetimeLedger()
+            let first = try RE4StageJ87StopCallbackInvocation.make(
+                exception:ex, exceptionPointer:3, contextPointer:4)
+            try ledger.record(first, expectedCurrentFrameAddress:4)
+            let changedException = try RE4StageJ87StopCallbackInvocation.make(
+                exception:ex, exceptionPointer:5, contextPointer:6)
+            do {
+                try ledger.record(changedException, expectedCurrentFrameAddress:6)
+                throw NSError(domain:"J8.7",code:2)
+            } catch RE4StageJ87Error.exceptionPointerChanged(expected:3, actual:5) { }
+            do {
+                try ledger.record(first, expectedCurrentFrameAddress:9)
+                throw NSError(domain:"J8.7",code:3)
+            } catch RE4StageJ87Error.callbackContextMismatch(expectedFrame:9, actualContext:4) { }
+        }
+
+        print("RESULT: \(passed)/10 passed; 0 failed")
         print("SCOPE: host-only ABI/TSD metadata; no raw callback, pthread API, provider, or Guest instruction executed.")
     }
 }
