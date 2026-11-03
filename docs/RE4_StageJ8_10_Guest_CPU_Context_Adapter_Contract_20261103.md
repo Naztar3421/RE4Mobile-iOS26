@@ -85,3 +85,10 @@ The validator also pins the forced and normal provider address sequences in a CS
 5. Only then connect a prepared SJLJ context to the live core, first in a gated test harness with an explicit stop/return boundary, before any original initializer or full startup path.
 
 No Guest instruction, Guest Memory write, live CPU state, provider function, pthread API, exception callback, or BX is executed by J.8.10. Runtime readiness remains **NOT READY TO ENTER**.
+
+
+## Stage J.8.12 implementation update — VFP D8-D15 stack transfers
+
+The former stack-transfer blocker is now addressed in the bounded Guest Core for the exact encodings used by #101: VPUSH {D8-D15} (0xED2D8B10) and VPOP {D8-D15} (0xECBD8B10). The implementation maps D8-D15 to S16-S31 and performs complete 64-byte Guest Memory transfers in ascending register order, low word then high word. VPUSH validates/writes the complete range before publishing SP; VPOP reads/decodes all bytes before changing VFP registers or SP. A separate VFP bank snapshot is available; the J.8.11 GPR/NZCV snapshot does not claim to contain VFP state.
+
+J.8.10's capability report now identifies VFP D8-D15 stack transfers as implemented, while Thumb execution remains unsupported. This does not execute BX or make the game runtime ready.

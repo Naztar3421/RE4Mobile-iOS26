@@ -194,7 +194,7 @@ struct StageJ811CoreArchitecturalStateTests {
             let before = try core.captureArchitecturalStateSnapshot()
             do {
                 _ = try core.prepareArchitecturalStateCommit(
-                    makeCandidate(vfp: .d8ThroughD15Required))
+                    makeCandidate(vfp: .d8ThroughD15RequiredInCPUContext))
                 throw NSError(domain: "J8.11", code: 7)
             } catch RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported { }
             let after = try core.captureArchitecturalStateSnapshot()
@@ -230,12 +230,11 @@ struct StageJ811CoreArchitecturalStateTests {
                 stackRange: stack, codeRange: code)
             let candidate = RE4StageJ811CPUStateCandidate.from(preparedContext: planned)
             try check(candidate.executionMode == .arm32Interpreter &&
-                      candidate.vfpRestoreRequirement == .d8ThroughD15Required,
-                      "J.8.10 #101 obligations were not preserved")
-            do {
-                _ = try core.prepareArchitecturalStateCommit(candidate)
-                throw NSError(domain: "J8.11", code: 9)
-            } catch RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported { }
+                      candidate.vfpRestoreRequirement == .d8ThroughD15RequiredByGuestEpilogue,
+                      "#101 VFP obligation must be delegated to its target epilogue")
+            _ = try core.prepareArchitecturalStateCommit(candidate)
+            try check(core.supportsVFPD8ThroughD15StackTransfers,
+                      "Core must implement the epilogue's VFP stack path")
         }
 
         try test("12 J.8.10 Thumb projection maps to a blocked Thumb commit candidate") {

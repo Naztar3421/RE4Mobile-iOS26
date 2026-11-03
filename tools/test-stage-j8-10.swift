@@ -179,13 +179,13 @@ struct StageJ810GuestCPUContextAdapterTests {
                       "target function epilogue obligation list mismatch")
         }
 
-        try test("13 current core gaps remain explicit: no Thumb execution or VFP stack transfers") {
+        try test("13 current core gap is Thumb only; D8-D15 stack transfers are implemented") {
             let frame = try makeFrame()
             let prepared = try RE4StageJ810GuestCPUContextAdapter.prepareForcedInstallContext(
                 current: makeState(), frame: frame, stackRange: stack, codeRange: text)
             try check(!prepared.guestCoreHasThumbExecution &&
-                      !prepared.guestCoreImplementsVFPStackTransfers,
-                      "adapter must not overstate existing core capabilities")
+                      prepared.guestCoreImplementsVFPStackTransfers,
+                      "adapter capability report does not match Core implementation")
         }
 
         print("RESULT: \(passed)/13 passed; 0 failed")

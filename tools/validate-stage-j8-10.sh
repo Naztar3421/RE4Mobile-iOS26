@@ -11,8 +11,10 @@ grep -Fq 'FORCED_PHASE2_BX_R0,0x358CF8E8,0xE12FFF10' "$FIXTURE"
 grep -Fq 'NORMAL_PHASE2_RESTORE_R7,0x358CF9D0,0xE5947020' "$FIXTURE"
 grep -Fq 'let word = try memory.readInstruction32(pc)' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
 grep -Fq 'registers[15] = target & ~3' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
-grep -Fq 'if word == 0xED2D8B10 { registers[13] = registers[13] &- 64; return true }' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
-grep -Fq 'if word == 0xECBD8B10 { registers[13] = registers[13] &+ 64; return true }' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'if word == 0xED2D8B10 { try executeVFPStackPushD8ThroughD15(); return true }' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'if word == 0xECBD8B10 { try executeVFPStackPopD8ThroughD15(); return true }' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'try memory.writeBytes(at: newSP, data: payload)' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'let payload = [UInt8](try memory.copyBytes(at: oldSP, count: 64))' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
 swiftc -D RE4_HOST_TESTING -parse-as-library \
   "$ROOT/RE4MCTPreview/RE4ARMv6InstructionSetState.swift" \
   "$ROOT/RE4MCTPreview/RE4StageJ89ContextRestorePreconditions.swift" \

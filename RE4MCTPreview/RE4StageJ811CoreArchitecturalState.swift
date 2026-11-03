@@ -19,7 +19,7 @@ public extension RE4StageJ811CPUStateCandidate {
             cpsrRestoreRequest: .modeledNZCVOnly,
             vfpRestoreRequirement:
                 preparedContext.targetFunctionEpilogueMustRestoreVFPRegisters.isEmpty
-                    ? .notRequired : .d8ThroughD15Required
+                    ? .notRequired : .d8ThroughD15RequiredByGuestEpilogue
         )
     }
 }

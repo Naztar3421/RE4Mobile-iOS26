@@ -17,10 +17,10 @@ invented for CPSR mode, T, interrupt masks, GE, Q, or other unmodeled fields.
 A snapshot labels those CPSR fields notRepresentedByCurrentCore; that marker is
 a statement about coverage, not a replacement bit pattern.
 
-VFP D8–D15 are not part of the snapshot. The current vpush {d8-d15} and
-vpop {d8-d15} handlers only adjust SP and do not transfer the register payload
-to or from Guest Memory. The snapshot therefore records
-d8ThroughD15NotCaptured.
+VFP D8–D15 remain outside the J.8.11 GPR/NZCV snapshot, which continues to
+record d8ThroughD15NotCaptured rather than pretending they are included.
+Stage J.8.12 adds a separate typed VFP D8–D15 snapshot and implements the
+actual VPUSH/VPOP Guest Memory transfers used by the #101 target epilogue.
 
 ## Two-phase commit
 
@@ -44,15 +44,14 @@ or modified by this commit API.
 
 - Thumb candidate: rejected (thumbExecutionUnsupported).
 - Complete CPSR restore: rejected (fullCPSRRestoreUnsupported).
-- D8–D15 restore: rejected (vfpD8ThroughD15RestoreUnsupported).
+- Direct D8–D15 injection into the GPR/NZCV commit: rejected (vfpD8ThroughD15RestoreUnsupported).
+- D8–D15 restored by #101's own target VPOP: accepted only because the Core's stack-transfer implementation is present.
 - Misaligned PC/SP and malformed register arrays: rejected before mutation.
 - Source state changed after preflight: rejected (sourceStateChangedBeforeCommit).
 
-The J.8.10-to-J.8.11 bridge carries the target mode and #101's D8–D15 epilogue
-obligation forward. Therefore the actual #101 context is still blocked from
-live commit while the existing VFP pop path is incomplete. This is intentional:
-the stage proves a safe generic ARM GPR/NZCV commit contract, not a runnable
-#101 handoff.
+The J.8.10-to-J.8.11 bridge carries #101's D8–D15 epilogue obligation forward.
+J.8.12 now satisfies the VFP stack-transfer portion of that obligation. Thumb
+execution and the provider BX/context handoff remain separate blockers.
 
 ## Validation
 
