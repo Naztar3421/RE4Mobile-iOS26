@@ -8,6 +8,8 @@ swiftc -D RE4_HOST_TESTING -parse-as-library \
   "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
   "$ROOT/RE4MCTPreview/RE4GuestMemoryRegions.swift" \
   "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift" \
+  "$ROOT/RE4MCTPreview/RE4MachO32Parser.swift" \
+  "$ROOT/RE4MCTPreview/RE4MachO32Loader.swift" \
   "$ROOT/RE4MCTPreview/RE4ARMv6InstructionSetState.swift" \
   "$ROOT/RE4MCTPreview/RE4StageJ89ContextRestorePreconditions.swift" \
   "$ROOT/RE4MCTPreview/RE4StageJ810GuestCPUContextAdapter.swift" \
@@ -21,6 +23,8 @@ swiftc -parse-as-library -emit-module \
   "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
   "$ROOT/RE4MCTPreview/RE4GuestMemoryRegions.swift" \
   "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift" \
+  "$ROOT/RE4MCTPreview/RE4MachO32Parser.swift" \
+  "$ROOT/RE4MCTPreview/RE4MachO32Loader.swift" \
   "$ROOT/RE4MCTPreview/RE4ARMv6InstructionSetState.swift" \
   "$ROOT/RE4MCTPreview/RE4StageJ89ContextRestorePreconditions.swift" \
   "$ROOT/RE4MCTPreview/RE4StageJ810GuestCPUContextAdapter.swift" \
