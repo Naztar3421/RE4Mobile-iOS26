@@ -347,6 +347,163 @@ public struct RE4GuestARMv6RunResult {
     }
 }
 
+/// Stage J.8.11: the exact CPU-state subset owned by this ARM-only interpreter.
+/// Kept beside the Core so standalone Core validators compile the same contract.
+public struct RE4StageJ811ConditionFlags: Equatable {
+    public let negative: Bool
+    public let zero: Bool
+    public let carry: Bool
+    public let overflow: Bool
+
+    public init(negative: Bool, zero: Bool, carry: Bool, overflow: Bool) {
+        self.negative = negative
+        self.zero = zero
+        self.carry = carry
+        self.overflow = overflow
+    }
+}
+
+public enum RE4StageJ811ExecutionMode: String, Equatable {
+    /// Operational mode of the current interpreter, not a sampled CPSR.T bit.
+    case arm32Interpreter
+    /// An explicit request for the unimplemented Thumb execution path.
+    case thumb16Required
+}
+
+public enum RE4StageJ811UnmodeledCPSRState: String, Equatable {
+    /// CPSR fields other than N/Z/C/V do not exist in the current Core model.
+    case notRepresentedByCurrentCore
+}
+
+public enum RE4StageJ811VFPStateCoverage: String, Equatable {
+    case d8ThroughD15NotCaptured
+}
+
+public enum RE4StageJ811CPSRRestoreRequest: String, Equatable {
+    case modeledNZCVOnly
+    case fullCPSR
+}
+
+public enum RE4StageJ811VFPRestoreRequirement: String, Equatable {
+    case notRequired
+    case d8ThroughD15Required
+}
+
+public enum RE4StageJ811CommitError: Error, Equatable {
+    case invalidRegisterFileCount(Int)
+    case programCounterNotWordAligned(UInt32)
+    case stackPointerNotWordAligned(UInt32)
+    case thumbExecutionUnsupported
+    case fullCPSRRestoreUnsupported
+    case vfpD8ThroughD15RestoreUnsupported
+    case sourceStateChangedBeforeCommit
+}
+
+/// Immutable snapshot of R0-R15 and N/Z/C/V. Unsupported CPSR and VFP fields
+/// are represented as absent coverage markers, never fabricated bit values.
+public struct RE4StageJ811CPUStateSnapshot: Equatable {
+    public let registers: [UInt32]
+    public let flags: RE4StageJ811ConditionFlags
+    public let executionMode: RE4StageJ811ExecutionMode
+    public let unmodeledCPSRState: RE4StageJ811UnmodeledCPSRState
+    public let vfpStateCoverage: RE4StageJ811VFPStateCoverage
+
+    public var pc: UInt32 { registers[15] }
+    public var sp: UInt32 { registers[13] }
+
+    public init(registers: [UInt32], flags: RE4StageJ811ConditionFlags) throws {
+        guard registers.count == 16 else {
+            throw RE4StageJ811CommitError.invalidRegisterFileCount(registers.count)
+        }
+        guard (registers[15] & 0x3) == 0 else {
+            throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+        }
+        guard (registers[13] & 0x3) == 0 else {
+            throw RE4StageJ811CommitError.stackPointerNotWordAligned(registers[13])
+        }
+        self.registers = registers
+        self.flags = flags
+        self.executionMode = .arm32Interpreter
+        self.unmodeledCPSRState = .notRepresentedByCurrentCore
+        self.vfpStateCoverage = .d8ThroughD15NotCaptured
+    }
+}
+
+/// Untrusted request: intentionally permits malformed input so preflight can
+/// reject it before touching the live Core state.
+public struct RE4StageJ811CPUStateCandidate: Equatable {
+    public let registers: [UInt32]
+    public let flags: RE4StageJ811ConditionFlags
+    public let executionMode: RE4StageJ811ExecutionMode
+    public let cpsrRestoreRequest: RE4StageJ811CPSRRestoreRequest
+    public let vfpRestoreRequirement: RE4StageJ811VFPRestoreRequirement
+
+    public init(
+        registers: [UInt32],
+        flags: RE4StageJ811ConditionFlags,
+        executionMode: RE4StageJ811ExecutionMode,
+        cpsrRestoreRequest: RE4StageJ811CPSRRestoreRequest = .modeledNZCVOnly,
+        vfpRestoreRequirement: RE4StageJ811VFPRestoreRequirement = .notRequired
+    ) {
+        self.registers = registers
+        self.flags = flags
+        self.executionMode = executionMode
+        self.cpsrRestoreRequest = cpsrRestoreRequest
+        self.vfpRestoreRequirement = vfpRestoreRequirement
+    }
+
+    func validate(
+        against source: RE4StageJ811CPUStateSnapshot
+    ) throws -> RE4StageJ811ValidatedCPUStateCommit {
+        guard registers.count == 16 else {
+            throw RE4StageJ811CommitError.invalidRegisterFileCount(registers.count)
+        }
+        guard executionMode == .arm32Interpreter else {
+            throw RE4StageJ811CommitError.thumbExecutionUnsupported
+        }
+        guard (registers[15] & 0x3) == 0 else {
+            throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+        }
+        guard (registers[13] & 0x3) == 0 else {
+            throw RE4StageJ811CommitError.stackPointerNotWordAligned(registers[13])
+        }
+        guard cpsrRestoreRequest == .modeledNZCVOnly else {
+            throw RE4StageJ811CommitError.fullCPSRRestoreUnsupported
+        }
+        guard vfpRestoreRequirement == .notRequired else {
+            throw RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported
+        }
+        return RE4StageJ811ValidatedCPUStateCommit(
+            expectedSource: source, registers: registers, flags: flags
+        )
+    }
+}
+
+/// Opaque preflight result. Its payload is module-internal.
+public struct RE4StageJ811ValidatedCPUStateCommit {
+    let expectedSource: RE4StageJ811CPUStateSnapshot
+    let registers: [UInt32]
+    let flags: RE4StageJ811ConditionFlags
+
+    init(
+        expectedSource: RE4StageJ811CPUStateSnapshot,
+        registers: [UInt32],
+        flags: RE4StageJ811ConditionFlags
+    ) {
+        self.expectedSource = expectedSource
+        self.registers = registers
+        self.flags = flags
+    }
+}
+
+public struct RE4StageJ811CommitReceipt: Equatable {
+    public let committedGeneralRegisterCount: Int
+    public let committedNZCV: Bool
+    public let restoredFullCPSR: Bool
+    public let restoredVFPD8ThroughD15: Bool
+    public let guestInstructionsExecuted: Bool
+}
+
 /// Bounded interpreter for the ARM integer/VFP subset observed in the MVP-14/15/18 harness.
 /// Platform calls are left to an explicit host hook; this is not a full ARMv6 emulator.
 public final class RE4GuestARMv6Core {
@@ -374,7 +531,7 @@ public final class RE4GuestARMv6Core {
     public func captureArchitecturalStateSnapshot() throws -> RE4StageJ811CPUStateSnapshot {
         try RE4StageJ811CPUStateSnapshot(
             registers: registers,
-            flags: RE4StageJ810ConditionFlags(
+            flags: RE4StageJ811ConditionFlags(
                 negative: negative, zero: zero, carry: carry, overflow: overflow
             )
         )

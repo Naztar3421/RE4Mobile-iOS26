@@ -37,7 +37,7 @@ struct StageJ811CoreArchitecturalStateTests {
         if count > 15 { registers[15] = pc }
         return RE4StageJ811CPUStateCandidate(
             registers: registers,
-            flags: RE4StageJ810ConditionFlags(
+            flags: RE4StageJ811ConditionFlags(
                 negative: true, zero: true, carry: false, overflow: true
             ),
             executionMode: mode,
