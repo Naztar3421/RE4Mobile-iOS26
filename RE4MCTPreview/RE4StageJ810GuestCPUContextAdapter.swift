@@ -155,7 +155,7 @@ public enum RE4StageJ810GuestCPUContextAdapter {
                 ["R4", "R5", "R6", "R7", "LR", "R8", "R10", "R11"],
             targetFunctionEpilogueMustRestoreVFPRegisters:
                 ["D8", "D9", "D10", "D11", "D12", "D13", "D14", "D15"],
-            guestCoreHasThumbExecution: false,
+            guestCoreHasThumbExecution: true,
             guestCoreImplementsVFPStackTransfers: true,
             guestInstructionsExecuted: false,
             guestMemoryWrites: 0,

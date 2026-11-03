@@ -160,7 +160,7 @@ struct StageJ811CoreArchitecturalStateTests {
                       "unaligned SP changed the source state")
         }
 
-        try test("07 Thumb candidate is blocked by the execution-mode capability gate") {
+        try test("07 Thumb live-context commit remains blocked by the J.8.11 transaction gate") {
             let core = makeCore()
             try seedCore(core)
             let before = try core.captureArchitecturalStateSnapshot()

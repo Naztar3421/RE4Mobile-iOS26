@@ -12,6 +12,9 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
     case vfpStackPointerUnderflow(UInt32)
     case vfpStackPointerOverflow(UInt32)
     case unsupportedInstruction(pc: UInt32, word: UInt32)
+    case unsupportedThumbInstruction(pc: UInt32, halfword: UInt16)
+    case instructionAddressMisaligned(pc: UInt32, instructionSet: String)
+    case unsupportedInstructionSetTransition(pc: UInt32, target: UInt32, source: String, destination: String)
     case stepLimit(limit: Int, pc: UInt32)
     case didNotReturn(pc: UInt32)
 
@@ -36,6 +39,12 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
         case .invalidRegister(let index): return "Invalid ARM register index \(index)."
         case .unsupportedInstruction(let pc, let word):
             return String(format: "Unsupported ARMv6 instruction 0x%08X at 0x%08X.", word, pc)
+        case .unsupportedThumbInstruction(let pc, let halfword):
+            return String(format: "Unsupported Thumb-1 instruction 0x%04X at 0x%08X.", halfword, pc)
+        case .instructionAddressMisaligned(let pc, let instructionSet):
+            return String(format: "%@ instruction address 0x%08X is misaligned.", instructionSet, pc)
+        case .unsupportedInstructionSetTransition(let pc, let target, let source, let destination):
+            return String(format: "Instruction-set transition %@ -> %@ at 0x%08X (target 0x%08X) is not enabled.", source, destination, pc, target)
         case .stepLimit(let limit, let pc):
             return String(format: "ARMv6 step limit %d reached at PC=0x%08X.", limit, pc)
         case .didNotReturn(let pc):
@@ -273,6 +282,10 @@ public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMap
     }
 
     /// Instruction fetch is distinct from data read and requires execute permission.
+    public func readInstruction16(_ address: UInt32) throws -> UInt16 {
+        UInt16(try readInteger(address, byteCount: 2, required: .execute))
+    }
+
     public func readInstruction32(_ address: UInt32) throws -> UInt32 {
         try readInteger(address, byteCount: 4, required: .execute)
     }
@@ -340,15 +353,18 @@ public struct RE4GuestARMv6RunResult {
     public let steps: Int
     public let registers: [UInt32]
     public let programCounter: UInt32
+    public let instructionSetState: RE4ARMv6InstructionSet
     public let returned: Bool
     public let halted: Bool
     public let exitCode: Int32?
 
     public init(steps: Int, registers: [UInt32], programCounter: UInt32,
+                instructionSetState: RE4ARMv6InstructionSet = .arm,
                 returned: Bool, halted: Bool = false, exitCode: Int32? = nil) {
         self.steps = steps
         self.registers = registers
         self.programCounter = programCounter
+        self.instructionSetState = instructionSetState
         self.returned = returned
         self.halted = halted
         self.exitCode = exitCode
@@ -435,19 +451,30 @@ public struct RE4StageJ811CPUStateSnapshot: Equatable {
     public var pc: UInt32 { registers[15] }
     public var sp: UInt32 { registers[13] }
 
-    public init(registers: [UInt32], flags: RE4StageJ811ConditionFlags) throws {
+    public init(
+        registers: [UInt32],
+        flags: RE4StageJ811ConditionFlags,
+        executionMode: RE4StageJ811ExecutionMode = .arm32Interpreter
+    ) throws {
         guard registers.count == 16 else {
             throw RE4StageJ811CommitError.invalidRegisterFileCount(registers.count)
         }
-        guard (registers[15] & 0x3) == 0 else {
-            throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+        switch executionMode {
+        case .arm32Interpreter:
+            guard (registers[15] & 0x3) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
+        case .thumb16Required:
+            guard (registers[15] & 0x1) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
         }
         guard (registers[13] & 0x3) == 0 else {
             throw RE4StageJ811CommitError.stackPointerNotWordAligned(registers[13])
         }
         self.registers = registers
         self.flags = flags
-        self.executionMode = .arm32Interpreter
+        self.executionMode = executionMode
         self.unmodeledCPSRState = .notRepresentedByCurrentCore
         self.vfpStateCoverage = .d8ThroughD15NotCaptured
     }
@@ -543,6 +570,7 @@ public final class RE4GuestARMv6Core {
     public let memory: RE4GuestARMv6Memory
     public private(set) var registers = [UInt32](repeating: 0, count: 16)
     public private(set) var steps = 0
+    public private(set) var instructionSetState: RE4ARMv6InstructionSet = .arm
     public var instructionHook: InstructionHook?
 
     private var negative = false
@@ -557,6 +585,9 @@ public final class RE4GuestARMv6Core {
         self.memory = memory
         self.instructionHook = instructionHook
     }
+
+    /// Implemented for the bounded ARMv6 Thumb-1 instruction subset in Stage J.8.13.
+    public var supportsThumb16InstructionStepping: Bool { true }
 
     /// Implemented for the exact D8-D15 VPUSH/VPOP encodings used by #101.
     public var supportsVFPD8ThroughD15StackTransfers: Bool { true }
@@ -605,7 +636,8 @@ public final class RE4GuestARMv6Core {
             registers: registers,
             flags: RE4StageJ811ConditionFlags(
                 negative: negative, zero: zero, carry: carry, overflow: overflow
-            )
+            ),
+            executionMode: instructionSetState == .arm ? .arm32Interpreter : .thumb16Required
         )
     }
 
@@ -614,6 +646,9 @@ public final class RE4GuestARMv6Core {
     public func prepareArchitecturalStateCommit(
         _ candidate: RE4StageJ811CPUStateCandidate
     ) throws -> RE4StageJ811ValidatedCPUStateCommit {
+        guard instructionSetState == .arm else {
+            throw RE4StageJ811CommitError.thumbExecutionUnsupported
+        }
         let source = try captureArchitecturalStateSnapshot()
         return try candidate.validate(
             against: source,
@@ -661,10 +696,13 @@ public final class RE4GuestARMv6Core {
         registers[index] = value
     }
 
-    /// Complete a host-side ARM procedure call and return to the caller's LR.
+    /// Complete a host-side procedure call without implementing guest BX/BLX interworking.
+    /// The current execution state is retained and only its PC alignment is applied.
     public func completeHostCall(returnValue: UInt32) {
         registers[0] = returnValue
-        registers[15] = registers[14] & ~3
+        registers[15] = instructionSetState == .arm
+            ? (registers[14] & ~UInt32(3))
+            : (registers[14] & ~UInt32(1))
     }
 
     /// Request termination of the emulated guest only; this never exits or terminates the iOS host app.
@@ -675,7 +713,11 @@ public final class RE4GuestARMv6Core {
 
     private func reg(_ index: Int, pc: UInt32) throws -> UInt32 {
         guard (0..<16).contains(index) else { throw RE4GuestRuntimeError.invalidRegister(index) }
-        return index == 15 ? pc &+ 8 : registers[index]
+        if index != 15 { return registers[index] }
+        switch instructionSetState {
+        case .arm: return pc &+ 8
+        case .thumb: return (pc &+ 4) & ~UInt32(3)
+        }
     }
 
     private func conditionPassed(_ condition: UInt32) -> Bool {
@@ -991,13 +1033,100 @@ public final class RE4GuestARMv6Core {
         return false
     }
 
+    private func setAddFlags(_ lhs: UInt32, _ rhs: UInt32, result: UInt32, wide: UInt64) {
+        negative = (result & 0x80000000) != 0
+        zero = result == 0
+        carry = wide > UInt64(UInt32.max)
+        overflow = ((~(lhs ^ rhs) & (lhs ^ result)) & 0x80000000) != 0
+    }
+
+    private func setSubFlags(_ lhs: UInt32, _ rhs: UInt32, result: UInt32) {
+        negative = (result & 0x80000000) != 0
+        zero = result == 0
+        carry = lhs >= rhs
+        overflow = (((lhs ^ rhs) & (lhs ^ result)) & 0x80000000) != 0
+    }
+
+    private func executeThumb16(_ instruction: UInt16, pc: UInt32) throws {
+        let half = UInt32(instruction)
+        if (instruction & 0xF800) == 0x2000 { // MOVS Rd, #imm8
+            let rd = Int((instruction >> 8) & 0x7)
+            let value = UInt32(instruction & 0x00FF)
+            registers[rd] = value
+            setNZ(value)
+            return
+        }
+        if (instruction & 0xF800) == 0x2800 { // CMP Rd, #imm8
+            let rn = Int((instruction >> 8) & 0x7)
+            let rhs = UInt32(instruction & 0x00FF)
+            let lhs = registers[rn]
+            setSubFlags(lhs, rhs, result: lhs &- rhs)
+            return
+        }
+        if (instruction & 0xF800) == 0x3000 { // ADDS Rd, #imm8
+            let rd = Int((instruction >> 8) & 0x7)
+            let lhs = registers[rd]
+            let rhs = UInt32(instruction & 0x00FF)
+            let wide = UInt64(lhs) + UInt64(rhs)
+            let result = UInt32(truncatingIfNeeded: wide)
+            registers[rd] = result
+            setAddFlags(lhs, rhs, result: result, wide: wide)
+            return
+        }
+        if (instruction & 0xF800) == 0x3800 { // SUBS Rd, #imm8
+            let rd = Int((instruction >> 8) & 0x7)
+            let lhs = registers[rd]
+            let rhs = UInt32(instruction & 0x00FF)
+            let result = lhs &- rhs
+            registers[rd] = result
+            setSubFlags(lhs, rhs, result: result)
+            return
+        }
+        if (instruction & 0xF800) == 0xE000 { // B label
+            let immediate = Int32(instruction & 0x07FF)
+            let signed = (immediate & 0x0400) != 0 ? immediate - 0x0800 : immediate
+            let displacement = signed * 2
+            registers[15] = UInt32(truncatingIfNeeded: Int64(pc) + 4 + Int64(displacement))
+            return
+        }
+        if (instruction & 0xF000) == 0xD000 { // B<cond> label
+            let condition = UInt32((instruction >> 8) & 0xF)
+            guard condition < 0xE else {
+                throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
+            }
+            if conditionPassed(condition) {
+                let immediate = Int32(Int8(bitPattern: UInt8(instruction & 0x00FF)))
+                registers[15] = UInt32(truncatingIfNeeded: Int64(pc) + 4 + Int64(immediate * 2))
+            }
+            return
+        }
+        _ = half
+        throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
+    }
+
     @discardableResult
     public func step() throws -> Bool {
         let pc = registers[15]
         if pc == memory.returnSentinel { return false }
+        let misaligned = instructionSetState == .arm ? (pc & 0x3) != 0 : (pc & 0x1) != 0
+        guard !misaligned else {
+            throw RE4GuestRuntimeError.instructionAddressMisaligned(
+                pc: pc, instructionSet: instructionSetState.rawValue
+            )
+        }
         if let instructionHook, try instructionHook(pc, self) {
             steps += 1
             return true
+        }
+        switch instructionSetState {
+        case .thumb:
+            let halfword = try memory.readInstruction16(pc)
+            registers[15] = pc &+ 2
+            steps += 1
+            try executeThumb16(halfword, pc: pc)
+            return true
+        case .arm:
+            break
         }
         let word = try memory.readInstruction32(pc)
         registers[15] = pc &+ 4
@@ -1008,8 +1137,18 @@ public final class RE4GuestARMv6Core {
         let pattern = word & 0x0FFFFFF0
         if pattern == 0x012FFF10 || pattern == 0x012FFF30 {
             let rm = Int(word & 0xF), target = try reg(rm, pc: pc)
+            if (target & 1) != 0 {
+                throw RE4GuestRuntimeError.unsupportedInstructionSetTransition(
+                    pc: pc, target: target, source: "ARM", destination: "Thumb"
+                )
+            }
+            guard (target & 0x3) == 0 else {
+                throw RE4GuestRuntimeError.instructionAddressMisaligned(
+                    pc: target, instructionSet: "ARM BX/BLX target"
+                )
+            }
             if pattern == 0x012FFF30 { registers[14] = pc &+ 4 }
-            registers[15] = target & ~3
+            registers[15] = target
             return true
         }
         if ((word >> 25) & 7) == 5 {
@@ -1041,8 +1180,22 @@ public final class RE4GuestARMv6Core {
         throw RE4GuestRuntimeError.unsupportedInstruction(pc: pc, word: word)
     }
 
-    public func run(entry: UInt32, arguments: [UInt32] = [], maxSteps: Int = 500_000) throws -> RE4GuestARMv6RunResult {
+    public func run(
+        entry: UInt32,
+        arguments: [UInt32] = [],
+        maxSteps: Int = 500_000,
+        initialInstructionSetState: RE4ARMv6InstructionSet = .arm
+    ) throws -> RE4GuestARMv6RunResult {
         guard maxSteps > 0 else { throw RE4GuestRuntimeError.stepLimit(limit: maxSteps, pc: entry) }
+        let misalignedEntry = initialInstructionSetState == .arm
+            ? (entry & 0x3) != 0
+            : (entry & 0x1) != 0
+        guard !misalignedEntry else {
+            throw RE4GuestRuntimeError.instructionAddressMisaligned(
+                pc: entry, instructionSet: initialInstructionSetState.rawValue
+            )
+        }
+        instructionSetState = initialInstructionSetState
         registers = [UInt32](repeating: 0, count: 16)
         steps = 0
         terminationRequested = false
@@ -1057,12 +1210,14 @@ public final class RE4GuestARMv6Core {
             if terminationRequested {
                 return RE4GuestARMv6RunResult(
                     steps: steps, registers: registers, programCounter: registers[15],
+                    instructionSetState: instructionSetState,
                     returned: false, halted: true, exitCode: requestedExitCode
                 )
             }
             if registers[15] == memory.returnSentinel {
                 return RE4GuestARMv6RunResult(steps: steps, registers: registers,
-                                              programCounter: registers[15], returned: true)
+                                              programCounter: registers[15],
+                                              instructionSetState: instructionSetState, returned: true)
             }
             _ = try step()
             if terminationRequested {
@@ -1080,7 +1235,8 @@ public final class RE4GuestARMv6Core {
         }
         if registers[15] == memory.returnSentinel {
             return RE4GuestARMv6RunResult(steps: steps, registers: registers,
-                                          programCounter: registers[15], returned: true)
+                                          programCounter: registers[15],
+                                          instructionSetState: instructionSetState, returned: true)
         }
         throw RE4GuestRuntimeError.stepLimit(limit: maxSteps, pc: registers[15])
     }
