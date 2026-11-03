@@ -33,3 +33,6 @@ swiftc -parse-as-library -emit-module \
 
 echo "RELEASE-MODE COMPILE: PASS"
 echo "VFP STACK CONTRACT: full-range Guest Memory transfer before SP/VFP publish"
+
+# Stage J.8.13: state-aware ARM/Thumb fetch and bounded Thumb-1 stepping.
+bash "$ROOT/tools/validate-stage-j8-13.sh"
