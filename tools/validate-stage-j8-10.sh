@@ -27,3 +27,6 @@ swiftc -parse-as-library -emit-module -module-name StageJ810ReleaseCompile \
   -emit-module-path "$TMP/StageJ810ReleaseCompile.swiftmodule"
 echo "RELEASE-MODE COMPILE: PASS"
 echo "FORCED/NORMAL PROVIDER EVIDENCE: $FIXTURE"
+
+# Stage J.8.11: real ARMv6 Core snapshot and failure-atomic state commit.
+bash "$ROOT/tools/validate-stage-j8-11.sh"

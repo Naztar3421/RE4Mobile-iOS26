@@ -369,6 +369,56 @@ public final class RE4GuestARMv6Core {
         self.instructionHook = instructionHook
     }
 
+    /// Captures only the architectural state that this interpreter actually models.
+    /// This is not a complete CPSR image and does not claim to capture VFP D8-D15.
+    public func captureArchitecturalStateSnapshot() throws -> RE4StageJ811CPUStateSnapshot {
+        try RE4StageJ811CPUStateSnapshot(
+            registers: registers,
+            flags: RE4StageJ810ConditionFlags(
+                negative: negative, zero: zero, carry: carry, overflow: overflow
+            )
+        )
+    }
+
+    /// Phase 1: validate the complete candidate against the current core state.
+    /// No live Guest CPU field is changed by this method.
+    public func prepareArchitecturalStateCommit(
+        _ candidate: RE4StageJ811CPUStateCandidate
+    ) throws -> RE4StageJ811ValidatedCPUStateCommit {
+        let source = try captureArchitecturalStateSnapshot()
+        return try candidate.validate(against: source)
+    }
+
+    /// Phase 2: compare the preflight source snapshot, then commit all modeled
+    /// GPRs and NZCV. There are no throwing operations after the first assignment.
+    /// The core is single-execution-thread confined; this is failure-atomic, not
+    /// a cross-thread synchronization primitive.
+    @discardableResult
+    public func commitArchitecturalStateAtomically(
+        _ prepared: RE4StageJ811ValidatedCPUStateCommit
+    ) throws -> RE4StageJ811CommitReceipt {
+        let current = try captureArchitecturalStateSnapshot()
+        guard current == prepared.expectedSource else {
+            throw RE4StageJ811CommitError.sourceStateChangedBeforeCommit
+        }
+
+        // All shape, alignment, mode and capability checks have already passed.
+        // These assignments cannot throw, and no Guest instruction is run here.
+        registers = prepared.registers
+        negative = prepared.flags.negative
+        zero = prepared.flags.zero
+        carry = prepared.flags.carry
+        overflow = prepared.flags.overflow
+
+        return RE4StageJ811CommitReceipt(
+            committedGeneralRegisterCount: 16,
+            committedNZCV: true,
+            restoredFullCPSR: false,
+            restoredVFPD8ThroughD15: false,
+            guestInstructionsExecuted: false
+        )
+    }
+
     public func registerValue(_ index: Int) throws -> UInt32 {
         guard (0..<16).contains(index) else { throw RE4GuestRuntimeError.invalidRegister(index) }
         return registers[index]
