@@ -85,7 +85,7 @@ public enum RE4ARMv6InstructionSetState {
             "BX and BLX-register bit-0 state selection: 5/5 vectors\n" +
             "ARM target word alignment and Thumb target halfword alignment: PASS\n" +
             "Synthetic address/state decoding only; CPSR and guest CPU state were not changed.\n" +
-            "No ARM or Thumb instruction was fetched or executed; Thumb decoding remains unimplemented."
+            "This helper remains a pure address/state decoder; bounded Thumb-1 execution is implemented separately by the Guest Core."
     }
 }
 
