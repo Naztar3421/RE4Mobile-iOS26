@@ -162,7 +162,7 @@ struct StageJ813ARMThumbExecutionTests {
                 _ = try memory.readInstruction16(0x1000)
                 throw NSError(domain: "J8.13", code: 5)
             } catch RE4GuestRuntimeError.memoryProtectionViolation(
-                0x1000, 2, "execute", "non-executable-thumb-test"
+                0x1000, 2, "--X", "non-executable-thumb-test"
             ) { }
         }
 
