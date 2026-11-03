@@ -92,3 +92,18 @@ No Guest instruction, Guest Memory write, live CPU state, provider function, pth
 The former stack-transfer blocker is now addressed in the bounded Guest Core for the exact encodings used by #101: VPUSH {D8-D15} (0xED2D8B10) and VPOP {D8-D15} (0xECBD8B10). The implementation maps D8-D15 to S16-S31 and performs complete 64-byte Guest Memory transfers in ascending register order, low word then high word. VPUSH validates/writes the complete range before publishing SP; VPOP reads/decodes all bytes before changing VFP registers or SP. A separate VFP bank snapshot is available; the J.8.11 GPR/NZCV snapshot does not claim to contain VFP state.
 
 J.8.10's capability report now identifies VFP D8-D15 stack transfers as implemented, while Thumb execution remains unsupported. This does not execute BX or make the game runtime ready.
+
+
+## Stage J.8.12 implementation update — VFP D8-D15 stack transfers
+
+The former stack-transfer blocker is now addressed in the bounded Guest Core
+for #101's exact encodings: VPUSH {D8-D15} (0xED2D8B10) and VPOP {D8-D15}
+(0xECBD8B10). D8-D15 map to S16-S31 and move as one complete 64-byte
+Guest Memory image in ascending register order, low word then high word.
+VPUSH completes its validated write before publishing SP; VPOP stages the
+complete read before changing the VFP bank and SP. A separate VFP bank
+snapshot is available; the J.8.11 GPR/NZCV snapshot does not claim VFP coverage.
+
+The adapter capability report now identifies VFP D8-D15 stack transfers as
+implemented. Thumb execution and provider BX remain unsupported; runtime
+readiness is not established.

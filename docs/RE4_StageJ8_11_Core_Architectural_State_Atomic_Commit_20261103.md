@@ -5,68 +5,54 @@ Date: 2026-11-03
 ## Scope
 
 J.8.11 connects the J.8.10 immutable forced-Resume projection to the real
-RE4GuestARMv6Core through an explicit snapshot and a two-phase state commit.
+RE4GuestARMv6Core through an explicit snapshot and two-phase GPR/NZCV commit.
 
-The current Core represents:
-- R0–R15 (16 32-bit general-purpose registers)
-- N, Z, C and V condition flags
-- an ARM-only 32-bit instruction fetch/step path
-
-It does not represent a complete CPSR image. In particular, no values are
-invented for CPSR mode, T, interrupt masks, GE, Q, or other unmodeled fields.
-A snapshot labels those CPSR fields notRepresentedByCurrentCore; that marker is
-a statement about coverage, not a replacement bit pattern.
-
-VFP D8–D15 remain outside the J.8.11 GPR/NZCV snapshot, which continues to
-record d8ThroughD15NotCaptured rather than pretending they are included.
-Stage J.8.12 adds a separate typed VFP D8–D15 snapshot and implements the
-actual VPUSH/VPOP Guest Memory transfers used by the #101 target epilogue.
+The Core snapshot represents R0-R15 and N/Z/C/V. It does not claim a complete
+CPSR image. Unmodeled CPSR fields are explicitly marked as not represented.
+VFP D8-D15 remain outside this GPR/NZCV snapshot, which records
+d8ThroughD15NotCaptured; J.8.12 supplies a separate typed VFP bank snapshot
+and the target function's actual VPUSH/VPOP stack transfer instructions.
 
 ## Two-phase commit
 
-1. captureArchitecturalStateSnapshot() reads the live 16 GPRs and NZCV into an
-   immutable, validated value.
-2. prepareArchitecturalStateCommit(_:) validates the entire candidate:
-   exactly 16 registers, ARM word-aligned PC, word-aligned SP, ARM-only mode,
-   modeled-NZCV-only CPSR policy, and no D8–D15 restore requirement. It changes
-   no live Core field.
-3. commitArchitecturalStateAtomically(_:) compares the live state against the
-   preflight source snapshot to reject stale plans. Only after that check does
-   it replace the complete GPR array and four condition flags. No throwing
-   operation follows the first assignment.
+1. captureArchitecturalStateSnapshot() captures the live GPRs and NZCV.
+2. prepareArchitecturalStateCommit(_:) validates the entire candidate and
+   returns an opaque commit token without mutating the Core.
+3. commitArchitecturalStateAtomically(_:) compares the exact source snapshot
+   to reject stale tokens; then replaces the complete GPR array and NZCV.
+   No throwing operation follows the first assignment.
 
-The apply phase is failure-atomic for the Core's single-execution-thread model.
-It is not a cross-thread synchronization primitive; the Core is not otherwise
-thread-safe. Steps, termination state, memory, and VFP registers are not reset
-or modified by this commit API.
+This is failure-atomic for the Core's single-execution-thread model, not a
+cross-thread synchronization primitive. The API does not reset steps,
+termination state, Guest Memory or VFP registers.
 
 ## Capability gates
 
-- Thumb candidate: rejected (thumbExecutionUnsupported).
-- Complete CPSR restore: rejected (fullCPSRRestoreUnsupported).
-- Direct D8–D15 injection into the GPR/NZCV commit: rejected (vfpD8ThroughD15RestoreUnsupported).
-- D8–D15 restored by #101's own target VPOP: accepted only because the Core's stack-transfer implementation is present.
+- Thumb candidate: rejected until a Thumb execution path exists.
+- Complete CPSR restore: rejected.
+- Direct D8-D15 injection into the GPR/NZCV commit: rejected.
+- D8-D15 restored by #101's target VPOP: accepted only because J.8.12 now
+  implements the exact VPUSH/VPOP stack-transfer capability.
 - Misaligned PC/SP and malformed register arrays: rejected before mutation.
-- Source state changed after preflight: rejected (sourceStateChangedBeforeCommit).
+- Source state changed after preflight: rejected.
 
-The J.8.10-to-J.8.11 bridge carries #101's D8–D15 epilogue obligation forward.
-J.8.12 now satisfies the VFP stack-transfer portion of that obligation. Thumb
-execution and the provider BX/context handoff remain separate blockers.
+The J.8.10-to-J.8.11 bridge carries #101's D8-D15 epilogue obligation forward.
+J.8.12 satisfies the VFP stack-transfer portion: the resumed function's own
+epilogue restores D8-D15 from Guest Memory. Thumb and provider BX/context
+application remain independent blockers.
 
 ## Validation
 
-tools/test-stage-j8-11.swift covers snapshot capture, NZCV, absent CPSR/VFP
-coverage, successful full GPR/NZCV apply, malformed candidates, Thumb/CPSR/VFP
-gates, stale-source rejection, and propagation of the J.8.10 #101 obligations.
+tools/test-stage-j8-11.swift covers snapshots, GPR/NZCV commit, malformed
+candidates, Thumb/CPSR/direct-VFP-restore gates, stale-token rejection, and
+J.8.10 obligation propagation.
 
-tools/validate-stage-j8-11.sh runs the tests and a Release-mode compile.
-The workflow reaches this validator through the existing J.8.5 through J.8.10
-validation chain.
+tools/validate-stage-j8-11.sh runs those tests and a Release-mode compile,
+then chains to J.8.12's dedicated VFP regression suite.
 
 ## Explicitly not delivered
 
-- No Thumb instruction decoder or CPSR.T implementation.
+- No Thumb decoder or Thumb execution.
 - No complete CPSR serialization/restoration.
-- No VFP D8–D15 load/store implementation.
-- No execution of the provider BX, no Guest instruction execution, and no
-  claim that Resident Evil 4 runtime startup is ready.
+- No BX execution or live provider context transfer.
+- No claim that Resident Evil 4 runtime startup is ready.

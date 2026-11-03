@@ -33,3 +33,6 @@ swiftc -parse-as-library -emit-module \
 
 echo "RELEASE-MODE COMPILE: PASS"
 echo "ATOMIC COMMIT CONTRACT: preflight-all-fields -> stale-source check -> no-throw modeled-state apply"
+
+# Stage J.8.12: real VFP D8-D15 Guest Memory stack transfers.
+bash "$ROOT/tools/validate-stage-j8-12.sh"
