@@ -6,6 +6,7 @@ import Foundation
 
 public enum RE4StageJ87Error: Error, Equatable {
     case zeroStopFunction
+    case keyNotCreated
     case zeroExceptionPointer
     case zeroContextPointer
     case missingFrame(UInt32)
@@ -97,7 +98,7 @@ public final class RE4StageJ87SJLJTSDModel {
 
     @discardableResult
     public func register(address: UInt32) throws -> RE4StageJ87SJLJFrame {
-        guard keyCreated else { throw RE4StageJ87Error.zeroStopFunction }
+        guard keyCreated else { throw RE4StageJ87Error.keyNotCreated }
         guard address != 0 else { throw RE4StageJ87Error.missingFrame(address) }
         let frame = RE4StageJ87SJLJFrame(address: address, previousFrame: top)
         frames[address] = frame
