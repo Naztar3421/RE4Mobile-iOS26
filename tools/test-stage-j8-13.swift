@@ -166,37 +166,45 @@ struct StageJ813ARMThumbExecutionTests {
             ) { }
         }
 
-        try test("09 Unsupported Thumb BX encoding fails closed without changing instruction state") {
+        try test("09 Thumb BX is decoded and can branch to a Thumb target") {
             let memory = makeMemory()
-            try memory.write16(0x1000, 0x4700) // BX R0; interworking is Stage J.8.14
-            let core = RE4GuestARMv6Core(memory: memory)
-            do {
-                _ = try core.run(
-                    entry: 0x1000, maxSteps: 2, initialInstructionSetState: .thumb
-                )
-                throw NSError(domain: "J8.13", code: 6)
-            } catch RE4GuestRuntimeError.unsupportedThumbInstruction(0x1000, 0x4700) { }
-            try check(core.instructionSetState == .thumb,
-                      "unsupported Thumb BX must not change state")
-            try check(try core.registerValue(15) == 0x1002,
-                      "failed instruction PC behavior should match the interpreter's fetch-then-decode model")
+            try memory.write16(0x1000, 0x4700) // BX R0
+            try memory.write16(0x2000, 0x2107) // MOVS R1,#7
+            let core = RE4GuestARMv6Core(
+                memory: memory,
+                instructionHook: { pc, cpu in
+                    guard pc == 0x2002 else { return false }
+                    cpu.requestTermination(exitCode: 0)
+                    return true
+                }
+            )
+            let result = try core.run(
+                entry: 0x1000, arguments: [0x2001], maxSteps: 8,
+                initialInstructionSetState: .thumb
+            )
+            let r1 = try core.registerValue(1)
+            try check(result.instructionSetState == .thumb && result.programCounter == 0x2002,
+                      "Thumb-to-Thumb BX did not preserve state/canonicalize target")
+            try check(r1 == 7, "Thumb BX target instruction was not executed")
         }
 
-        try test("10 ARM BX to a Thumb target is rejected instead of masking the state bit") {
+        try test("10 ARM BX to a Thumb target switches mode and executes Thumb code") {
             let memory = makeMemory()
             try memory.write32(0x1000, 0xE12FFF10) // BX R0
-            let core = RE4GuestARMv6Core(memory: memory)
-            try core.setRegisterValue(0, value: 0x2001)
-            try core.setRegisterValue(15, value: 0x1000)
-            do {
-                _ = try core.step()
-                throw NSError(domain: "J8.13", code: 7)
-            } catch RE4GuestRuntimeError.unsupportedInstructionSetTransition(
-                0x1000, 0x2001, "ARM", "Thumb"
-            ) { }
-            try check(core.instructionSetState == .arm, "ARM BX changed state before J.8.14")
-            try check(try core.registerValue(15) == 0x1004,
-                      "ARM fetch/decode PC behavior changed unexpectedly")
+            try memory.write16(0x2000, 0x2107) // MOVS R1,#7
+            let core = RE4GuestARMv6Core(
+                memory: memory,
+                instructionHook: { pc, cpu in
+                    guard pc == 0x2002 else { return false }
+                    cpu.requestTermination(exitCode: 0)
+                    return true
+                }
+            )
+            let result = try core.run(entry: 0x1000, arguments: [0x2001], maxSteps: 8)
+            let r1 = try core.registerValue(1)
+            try check(result.instructionSetState == .thumb && result.programCounter == 0x2002,
+                      "ARM-to-Thumb BX did not publish the selected mode/canonical PC")
+            try check(r1 == 7, "Thumb instruction after ARM BX did not execute")
         }
 
         try test("11 ARM stepping remains 32-bit and preserves its existing PC increment") {
@@ -237,6 +245,6 @@ struct StageJ813ARMThumbExecutionTests {
         }
 
         print("RESULT: \(passed)/13 passed; 0 failed")
-        print("SCOPE: ARM/Thumb fetch width, PC alignment/advance, bounded Thumb-1 immediate arithmetic and branches. BX/BLX interworking, wide Thumb, full Thumb-1 ISA and live context transfer remain disabled.")
+        print("SCOPE: ARM/Thumb fetch width, PC alignment/advance, bounded Thumb-1 arithmetic, branches and BX state selection. BLX link semantics are covered by J.8.14.")
     }
 }

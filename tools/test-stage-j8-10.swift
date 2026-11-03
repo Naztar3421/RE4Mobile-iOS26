@@ -184,6 +184,7 @@ struct StageJ810GuestCPUContextAdapterTests {
             let prepared = try RE4StageJ810GuestCPUContextAdapter.prepareForcedInstallContext(
                 current: makeState(), frame: frame, stackRange: stack, codeRange: text)
             try check(prepared.guestCoreHasThumbExecution &&
+                      prepared.guestCoreImplementsBXBLXRegisterInterworking &&
                       prepared.guestCoreImplementsVFPStackTransfers,
                       "adapter capability report does not match Core implementation")
         }

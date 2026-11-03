@@ -20,31 +20,35 @@ public struct RE4ARMv6StateTransition: Equatable {
 /// fetch an instruction, or execute ARM/Thumb code.
 public enum RE4ARMv6InstructionSetState {
     public static func resolveBX(from sourceState: RE4ARMv6InstructionSet,
-                                 registerTarget: UInt32) -> RE4ARMv6StateTransition {
-        resolveExchange(from: sourceState, registerTarget: registerTarget)
+                                 registerTarget: UInt32) throws -> RE4ARMv6StateTransition {
+        try resolveExchange(from: sourceState, registerTarget: registerTarget)
     }
 
     public static func resolveBLXRegister(from sourceState: RE4ARMv6InstructionSet,
-                                          registerTarget: UInt32) -> RE4ARMv6StateTransition {
-        resolveExchange(from: sourceState, registerTarget: registerTarget)
+                                          registerTarget: UInt32) throws -> RE4ARMv6StateTransition {
+        try resolveExchange(from: sourceState, registerTarget: registerTarget)
     }
 
-    /// ARM interworking rule for a register target:
-    /// bit 0 selects Thumb when set and ARM when clear; ARM targets are word-aligned,
-    /// while Thumb targets are halfword-aligned.
-    private static func resolveExchange(from sourceState: RE4ARMv6InstructionSet,
-                                        registerTarget: UInt32) -> RE4ARMv6StateTransition {
-        if registerTarget & 1 != 0 {
+    /// Bit 0 selects Thumb when set and ARM when clear. Thumb targets clear bit 0.
+    /// This model requires ARM targets to be word-aligned and fails closed otherwise.
+    private static func resolveExchange(
+        from sourceState: RE4ARMv6InstructionSet,
+        registerTarget: UInt32
+    ) throws -> RE4ARMv6StateTransition {
+        if (registerTarget & 1) != 0 {
             return RE4ARMv6StateTransition(
                 sourceState: sourceState,
                 targetState: .thumb,
                 targetAddress: registerTarget & ~UInt32(1)
             )
         }
+        guard (registerTarget & 0x3) == 0 else {
+            throw RE4ARMv6InstructionSetStateError.unsupportedARMTargetAlignment(registerTarget)
+        }
         return RE4ARMv6StateTransition(
             sourceState: sourceState,
             targetState: .arm,
-            targetAddress: registerTarget & ~UInt32(3)
+            targetAddress: registerTarget
         )
     }
 
@@ -62,15 +66,15 @@ public enum RE4ARMv6InstructionSetState {
                    expectedAddress: 0x00011FC0, expectedState: .arm),
             Vector(source: .arm, rawTarget: 0x00001237,
                    expectedAddress: 0x00001236, expectedState: .thumb),
-            Vector(source: .thumb, rawTarget: 0x00001236,
+            Vector(source: .thumb, rawTarget: 0x00001234,
                    expectedAddress: 0x00001234, expectedState: .arm),
             Vector(source: .arm, rawTarget: 0x35D87D71,
                    expectedAddress: 0x35D87D70, expectedState: .thumb)
         ]
 
         for vector in vectors {
-            let bx = resolveBX(from: vector.source, registerTarget: vector.rawTarget)
-            let blx = resolveBLXRegister(from: vector.source, registerTarget: vector.rawTarget)
+            let bx = try resolveBX(from: vector.source, registerTarget: vector.rawTarget)
+            let blx = try resolveBLXRegister(from: vector.source, registerTarget: vector.rawTarget)
             guard bx.targetAddress == vector.expectedAddress,
                   bx.targetState == vector.expectedState,
                   bx.targetCPSRTBit == (vector.expectedState == .thumb),
@@ -81,19 +85,28 @@ public enum RE4ARMv6InstructionSetState {
             }
         }
 
+        do {
+            _ = try resolveBX(from: .arm, registerTarget: 0x00001236)
+            throw RE4ARMv6InstructionSetStateError.selfTestFailed(
+                "non-word-aligned ARM target was silently accepted"
+            )
+        } catch RE4ARMv6InstructionSetStateError.unsupportedARMTargetAlignment(0x00001236) { }
+
         return "ARM/Thumb register-branch state-transition self-test PASS\n" +
             "BX and BLX-register bit-0 state selection: 5/5 vectors\n" +
-            "ARM target word alignment and Thumb target halfword alignment: PASS\n" +
-            "Synthetic address/state decoding only; CPSR and guest CPU state were not changed.\n" +
-            "This helper remains a pure address/state decoder; bounded Thumb-1 execution is implemented separately by the Guest Core."
+            "ARM target alignment rejection: PASS\n" +
+            "Synthetic state decoding only; live state changes are owned by the Guest Core branch executor."
     }
 }
 
 public enum RE4ARMv6InstructionSetStateError: Error, LocalizedError {
+    case unsupportedARMTargetAlignment(UInt32)
     case selfTestFailed(String)
 
     public var errorDescription: String? {
         switch self {
+        case .unsupportedARMTargetAlignment(let target):
+            return String(format: "ARM BX/BLX target 0x%08X is not word-aligned.", target)
         case .selfTestFailed(let detail):
             return "ARM/Thumb state-transition synthetic test failed: \(detail)"
         }

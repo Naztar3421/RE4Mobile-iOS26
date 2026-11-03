@@ -15,6 +15,7 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
     case unsupportedThumbInstruction(pc: UInt32, halfword: UInt16)
     case instructionAddressMisaligned(pc: UInt32, instructionSet: String)
     case unsupportedInstructionSetTransition(pc: UInt32, target: UInt32, source: String, destination: String)
+    case unsupportedARMBranchTargetAlignment(UInt32)
     case stepLimit(limit: Int, pc: UInt32)
     case didNotReturn(pc: UInt32)
 
@@ -45,6 +46,8 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
             return String(format: "%@ instruction address 0x%08X is misaligned.", instructionSet, pc)
         case .unsupportedInstructionSetTransition(let pc, let target, let source, let destination):
             return String(format: "Instruction-set transition %@ -> %@ at 0x%08X (target 0x%08X) is not enabled.", source, destination, pc, target)
+        case .unsupportedARMBranchTargetAlignment(let target):
+            return String(format: "ARMv6 BX/BLX target 0x%08X is not word-aligned; refusing to normalize it.", target)
         case .stepLimit(let limit, let pc):
             return String(format: "ARMv6 step limit %d reached at PC=0x%08X.", limit, pc)
         case .didNotReturn(let pc):
@@ -716,7 +719,7 @@ public final class RE4GuestARMv6Core {
         if index != 15 { return registers[index] }
         switch instructionSetState {
         case .arm: return pc &+ 8
-        case .thumb: return (pc &+ 4) & ~UInt32(3)
+        case .thumb: return pc &+ 4
         }
     }
 
@@ -1047,7 +1050,46 @@ public final class RE4GuestARMv6Core {
         overflow = (((lhs ^ rhs) & (lhs ^ result)) & 0x80000000) != 0
     }
 
+    /// Performs the state-selecting PC write shared by A32 and T16 BX/BLX-register.
+    /// The target is validated before LR, PC, or the current instruction state changes.
+    private func executeRegisterBranchExchange(
+        rawTarget: UInt32,
+        linkRegisterValue: UInt32?
+    ) throws {
+        let transition: RE4ARMv6StateTransition
+        do {
+            transition = try RE4ARMv6InstructionSetState.resolveBX(
+                from: instructionSetState,
+                registerTarget: rawTarget
+            )
+        } catch RE4ARMv6InstructionSetStateError.unsupportedARMTargetAlignment(let target) {
+            throw RE4GuestRuntimeError.unsupportedARMBranchTargetAlignment(target)
+        } catch {
+            throw error
+        }
+
+        if let linkRegisterValue {
+            registers[14] = linkRegisterValue
+        }
+        registers[15] = transition.targetAddress
+        instructionSetState = transition.targetState
+    }
+
     private func executeThumb16(_ instruction: UInt16, pc: UInt32) throws {
+        let branchRegisterOpcode = instruction & 0xFF87
+        if branchRegisterOpcode == 0x4700 || branchRegisterOpcode == 0x4780 {
+            let rm = Int((instruction >> 3) & 0xF)
+            guard rm != 15 else {
+                throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
+            }
+            let rawTarget = registers[rm]
+            let isBLX = branchRegisterOpcode == 0x4780
+            // Thumb BLX-register links to the next halfword with bit 0 set.
+            let link = isBLX ? ((pc &+ 2) | 1) : nil
+            try executeRegisterBranchExchange(rawTarget: rawTarget, linkRegisterValue: link)
+            return
+        }
+
         if (instruction & 0xF800) == 0x2000 { // MOVS Rd, #imm8
             let rd = Int((instruction >> 8) & 0x7)
             let value = UInt32(instruction & 0x00FF)
@@ -1142,19 +1184,14 @@ public final class RE4GuestARMv6Core {
 
         let pattern = word & 0x0FFFFFF0
         if pattern == 0x012FFF10 || pattern == 0x012FFF30 {
-            let rm = Int(word & 0xF), target = try reg(rm, pc: pc)
-            if (target & 1) != 0 {
-                throw RE4GuestRuntimeError.unsupportedInstructionSetTransition(
-                    pc: pc, target: target, source: "ARM", destination: "Thumb"
-                )
-            }
-            guard (target & 0x3) == 0 else {
-                throw RE4GuestRuntimeError.instructionAddressMisaligned(
-                    pc: target, instructionSet: "ARM BX/BLX target"
-                )
-            }
-            if pattern == 0x012FFF30 { registers[14] = pc &+ 4 }
-            registers[15] = target
+            let rm = Int(word & 0xF)
+            let target = try reg(rm, pc: pc)
+            let isBLX = pattern == 0x012FFF30
+            // A32 BLX-register links to the next ARM word.
+            try executeRegisterBranchExchange(
+                rawTarget: target,
+                linkRegisterValue: isBLX ? (pc &+ 4) : nil
+            )
             return true
         }
         if ((word >> 25) & 7) == 5 {

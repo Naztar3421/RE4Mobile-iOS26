@@ -82,6 +82,7 @@ public struct RE4StageJ810PreparedContext: Equatable {
     public let targetFunctionEpilogueMustRestoreCoreRegisters: [String]
     public let targetFunctionEpilogueMustRestoreVFPRegisters: [String]
     public let guestCoreHasThumbExecution: Bool
+    public let guestCoreImplementsBXBLXRegisterInterworking: Bool
     public let guestCoreImplementsVFPStackTransfers: Bool
     public let guestInstructionsExecuted: Bool
     public let guestMemoryWrites: Int
@@ -156,6 +157,7 @@ public enum RE4StageJ810GuestCPUContextAdapter {
             targetFunctionEpilogueMustRestoreVFPRegisters:
                 ["D8", "D9", "D10", "D11", "D12", "D13", "D14", "D15"],
             guestCoreHasThumbExecution: true,
+            guestCoreImplementsBXBLXRegisterInterworking: true,
             guestCoreImplementsVFPStackTransfers: true,
             guestInstructionsExecuted: false,
             guestMemoryWrites: 0,

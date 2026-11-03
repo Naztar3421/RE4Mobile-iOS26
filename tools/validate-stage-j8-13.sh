@@ -36,4 +36,6 @@ swiftc -parse-as-library -emit-module \
 
 echo "RELEASE-MODE COMPILE: PASS"
 echo "ARM/THUMB CONTRACT: state-specific fetch width, canonical PC and bounded Thumb-1 decode"
-# Stage J.8.13 remains inside the established J.8.5 umbrella validation chain.
+# Stage J.8.14: actual A32/T16 BX/BLX-register interworking and return-link semantics.
+bash "$ROOT/tools/validate-stage-j8-14.sh"
+# J.8.13/J.8.14 remain inside the established J.8.5 umbrella validation chain.
