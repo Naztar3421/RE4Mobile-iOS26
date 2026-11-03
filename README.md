@@ -307,3 +307,14 @@ The bounded Res4 ExtraProductList initializer #101 SJLJ path now has an integrat
 - Global Guest Runtime entry gate: **NOT READY**. The bounded #101 model does not resolve the separate loader, import/provider, ARM/Thumb and process-lifecycle requirements.
 
 See [Stage J.9 integration review](docs/stage-j9-sjlj-integration-readiness.md) and [Stage J.9 readiness matrix](docs/stage-j9-sjlj-readiness-matrix.csv) for the full gate-by-gate distinction. A successful host test or unsigned app build is not evidence of a playable runtime.
+
+
+## Stage J.10 — Provider Callable Closure Audit
+
+The read-only Stage J.10 audit inventories the seven direct provider imports seen in the 240-entry initializer analysis, their provider addresses and ARM/Thumb states, Res4 stubs and pointer slots, ARM32 ABI contracts, and current host/Guest implementation coverage. It also maps the SJLJ personality/context helpers, pthread TSD dependencies, forced-unwind stop callback, and C++ wide-string / ios_base::Init cleanup dependencies.
+
+All seven direct import pointers have Stage I-D readback PASS and point into shared-cache TEXT_RX/RX, but none is in the explicit HLE implemented-function set (0/7). The seven symbols account for 502 unique static imported call sites. Host-side J.4/J.6–J.8.5 models cover bounded data/state behavior only; no target provider, callback, pthread operation, destructor, personality, unwinder or Guest instruction is executed.
+
+See [Stage J.10 Provider Callable Closure Audit](docs/stage-j10-provider-callable-closure.md) and [Stage J.10 Provider Dependency Matrix](docs/stage-j10-provider-dependency-matrix.csv) for the per-symbol ABI/state inventory, transitive closure, unresolved provider identities, and closure checklist. The J.7 INSTALL_CONTEXT current-frame/TSD-top correction supersedes earlier wording that implied the frame was unlinked before cleanup.
+
+**Stage J.10 does not change readiness:** executable SJLJ remains BLOCKED and GUEST_RUNTIME_ENTRY_GATE remains NOT READY.
