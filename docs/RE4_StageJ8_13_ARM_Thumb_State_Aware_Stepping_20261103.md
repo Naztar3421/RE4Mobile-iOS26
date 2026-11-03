@@ -23,6 +23,7 @@ This stage implements a deliberately bounded Thumb-1 subset. It is not a complet
   - `CMP Rd,#imm8`
   - `ADDS Rd,#imm8`
   - `SUBS Rd,#imm8`
+  - PC-relative literal `LDR Rt,[PC,#imm8*4]`
   - unconditional `B label`
   - conditional `B<cond> label` for conditions EQ through LE
 - ADD/CMP update the modeled NZCV flags; MOVS updates N/Z while preserving C/V.
@@ -42,7 +43,7 @@ The existing ARM BX/BLX register path is intentionally fail-closed for odd (Thum
 
 ## Validation
 
-A dedicated 12-case host regression suite covers:
+A dedicated 13-case host regression suite covers:
 
 1. exact 16-bit fetch at a boundary where a 32-bit fetch would overrun;
 2. Thumb sequential PC advance by two;
@@ -55,7 +56,8 @@ A dedicated 12-case host regression suite covers:
 9. fail-closed Thumb BX;
 10. fail-closed ARM BX to an odd target;
 11. preserved ARM 32-bit instruction stepping;
-12. explicit Thumb state in the run result and architectural snapshot.
+12. explicit Thumb state in the run result and architectural snapshot;
+13. Thumb literal-load PC alignment via `Align(PC+4,4)`.
 
 The validator runs the host tests and separately compiles the production sources without `RE4_HOST_TESTING`.
 

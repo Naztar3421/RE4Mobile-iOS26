@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+grep -Fq 'public func readInstruction16' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'let halfword = try memory.readInstruction16(pc)' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'let alignedPC = (pc &+ 4) & ~UInt32(3)' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

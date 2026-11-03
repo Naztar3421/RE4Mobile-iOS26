@@ -223,7 +223,20 @@ struct StageJ813ARMThumbExecutionTests {
                       "run result must report the executed instruction set")
         }
 
-        print("RESULT: \(passed)/12 passed; 0 failed")
+        try test("13 Thumb PC-relative literal LDR uses Align(PC+4,4)") {
+            let memory = makeMemory()
+            try memory.write16(0x1002, 0x4801) // LDR R0,[PC,#4]
+            try memory.write32(0x1008, 0xDEADBEEF)
+            let (core, result) = try runThumb(
+                memory: memory, entry: 0x1002, stopPC: 0x1004
+            )
+            try check(try core.registerValue(0) == 0xDEADBEEF,
+                      "Thumb literal LDR did not align PC+4 before adding its scaled immediate")
+            try check(result.programCounter == 0x1004,
+                      "Thumb literal LDR sequential PC must advance by two")
+        }
+
+        print("RESULT: \(passed)/13 passed; 0 failed")
         print("SCOPE: ARM/Thumb fetch width, PC alignment/advance, bounded Thumb-1 immediate arithmetic and branches. BX/BLX interworking, wide Thumb, full Thumb-1 ISA and live context transfer remain disabled.")
     }
 }

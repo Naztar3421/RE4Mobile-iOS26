@@ -179,7 +179,7 @@ struct StageJ810GuestCPUContextAdapterTests {
                       "target function epilogue obligation list mismatch")
         }
 
-        try test("13 bounded Thumb stepping and VFP stack transfers are implemented; D8-D15 stack transfers are implemented") {
+        try test("13 bounded Thumb stepping and VFP D8-D15 stack transfers are implemented") {
             let frame = try makeFrame()
             let prepared = try RE4StageJ810GuestCPUContextAdapter.prepareForcedInstallContext(
                 current: makeState(), frame: frame, stackRange: stack, codeRange: text)

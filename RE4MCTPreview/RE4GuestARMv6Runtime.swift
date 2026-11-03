@@ -1048,7 +1048,6 @@ public final class RE4GuestARMv6Core {
     }
 
     private func executeThumb16(_ instruction: UInt16, pc: UInt32) throws {
-        let half = UInt32(instruction)
         if (instruction & 0xF800) == 0x2000 { // MOVS Rd, #imm8
             let rd = Int((instruction >> 8) & 0x7)
             let value = UInt32(instruction & 0x00FF)
@@ -1082,6 +1081,14 @@ public final class RE4GuestARMv6Core {
             setSubFlags(lhs, rhs, result: result)
             return
         }
+        if (instruction & 0xF800) == 0x4800 { // LDR Rt, [PC, #imm8*4]
+            let rt = Int((instruction >> 8) & 0x7)
+            let alignedPC = (pc &+ 4) & ~UInt32(3)
+            let offset = UInt32(instruction & 0x00FF) &* 4
+            let address = alignedPC &+ offset
+            registers[rt] = try memory.read32(address)
+            return
+        }
         if (instruction & 0xF800) == 0xE000 { // B label
             let immediate = Int32(instruction & 0x07FF)
             let signed = (immediate & 0x0400) != 0 ? immediate - 0x0800 : immediate
@@ -1100,7 +1107,6 @@ public final class RE4GuestARMv6Core {
             }
             return
         }
-        _ = half
         throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
     }
 
@@ -1223,6 +1229,7 @@ public final class RE4GuestARMv6Core {
             if terminationRequested {
                 return RE4GuestARMv6RunResult(
                     steps: steps, registers: registers, programCounter: registers[15],
+                    instructionSetState: instructionSetState,
                     returned: false, halted: true, exitCode: requestedExitCode
                 )
             }
