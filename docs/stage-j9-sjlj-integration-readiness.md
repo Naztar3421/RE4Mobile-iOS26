@@ -70,3 +70,17 @@ Before reconsidering executable SJLJ readiness, separately establish: (1) callab
 These are evidence prerequisites, not permission to execute Guest code.
 
 **J.9 conclusion:** The bounded #101 static and host-model gap is closed. Executable SJLJ remains BLOCKED. Global Guest Runtime remains NOT READY.
+
+
+## J.8.7–J.8.10 adapter-design checkpoint (2026-11-03)
+
+The subsequent provider audits and host models extend the earlier J.9 review:
+
+- J.8.7: six-argument AAPCS32 stop callback ABI, callback identity ledger and provider TSD rules.
+- J.8.8: per-thread TSD lifecycle, distinguishing provider end-of-stack return from the caller's later Unregister.
+- J.8.9: #101 stack/frame relations, provider R7/SP/PC loads and target epilogue responsibilities.
+- J.8.10: immutable Guest CPU successor-state projection for the forced InstallContext tail. It accounts for the raw continuation value remaining in R0, changes the planned R7/SP/PC/T state, preserves the currently modelled N/Z/C/V flags, and checks that provider R4 identifies the selected frame.
+
+J.8.10 remains a data-only adapter contract: it does not mutate the core or execute BX. The current core still lacks Thumb fetch/decode/state, an atomic architectural-state snapshot/commit API, full CPSR representation, and actual VFP D8–D15 stack payload transfers (its legacy VFP push/pop handlers currently adjust SP only). These are executable-runtime blockers.
+
+The J.8.10 local regression suite reports 13/13 and Release-mode compile PASS. The validator is chained after J.8.9. This does not change the gate decision: SJLJ executable runtime remains BLOCKED and global Guest Runtime remains NOT READY.

@@ -19,3 +19,6 @@ swiftc -parse-as-library -emit-module -module-name StageJ89ReleaseCompile \
   -emit-module-path "$TMP/StageJ89ReleaseCompile.swiftmodule"
 echo "RELEASE-MODE COMPILE: PASS"
 echo "EVIDENCE FIXTURE: $FIXTURE"
+
+# The forced-Resume CPU context adapter contract follows the J.8.9 preflight.
+bash "$ROOT/tools/validate-stage-j8-10.sh"
