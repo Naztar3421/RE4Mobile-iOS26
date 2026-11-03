@@ -8,6 +8,9 @@ grep -Fq 'branchRegisterOpcode == 0x4700 || branchRegisterOpcode == 0x4780' "$RO
 grep -Fq 'linkRegisterValue: isBLX ? (pc &+ 4) : nil' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
 grep -Fq 'let link = isBLX ? ((pc &+ 2) | 1) : nil' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
 grep -Fq 'instructionSetState = transition.targetState' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'let rawTarget = try reg(rm, pc: pc)' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'guard !isBLX || rm != 15' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
+grep -Fq 'unsupportedARMBranchTargetAlignment' "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift"
 
 swiftc -D RE4_HOST_TESTING -parse-as-library \
   "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \

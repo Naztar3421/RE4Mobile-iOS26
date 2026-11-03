@@ -1079,13 +1079,14 @@ public final class RE4GuestARMv6Core {
         let branchRegisterOpcode = instruction & 0xFF87
         if branchRegisterOpcode == 0x4700 || branchRegisterOpcode == 0x4780 {
             let rm = Int((instruction >> 3) & 0xF)
-            guard rm != 15 else {
+            let isBLX = branchRegisterOpcode == 0x4780
+            // ARMv6 Thumb BX permits R15 as a PC+4 source. BLX-register with
+            // R15 is unpredictable in this bounded implementation and fails closed.
+            guard !isBLX || rm != 15 else {
                 throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
             }
-            let rawTarget = registers[rm]
-            let isBLX = branchRegisterOpcode == 0x4780
+            let rawTarget = try reg(rm, pc: pc)
             // Thumb BLX-register links to the next halfword with bit 0 set.
-            let link = isBLX ? ((pc &+ 2) | 1) : nil
             try executeRegisterBranchExchange(rawTarget: rawTarget, linkRegisterValue: link)
             return
         }
@@ -1185,8 +1186,13 @@ public final class RE4GuestARMv6Core {
         let pattern = word & 0x0FFFFFF0
         if pattern == 0x012FFF10 || pattern == 0x012FFF30 {
             let rm = Int(word & 0xF)
-            let target = try reg(rm, pc: pc)
             let isBLX = pattern == 0x012FFF30
+            // A32 BX PC is architecturally defined; BLX-register with R15 is
+            // unpredictable, so reject it before changing LR or execution mode.
+            guard !isBLX || rm != 15 else {
+                throw RE4GuestRuntimeError.unsupportedInstruction(pc: pc, word: word)
+            }
+            let target = try reg(rm, pc: pc)
             // A32 BLX-register links to the next ARM word.
             try executeRegisterBranchExchange(
                 rawTarget: target,

@@ -48,6 +48,7 @@ public enum RE4MachO32InitializerAudit {
         case ambiguousInitializerSections(Int)
         case malformedInitializerSection(String)
         case initializerCountOutOfRange(UInt64)
+        case invalidInitializerPointer(index: Int, raw: UInt32)
         case memoryReadFailed(UInt32)
         case syntheticSelfTestFailed(String)
 
@@ -61,6 +62,8 @@ public enum RE4MachO32InitializerAudit {
                 return "Malformed __mod_init_func section: \(reason)."
             case .initializerCountOutOfRange(let count):
                 return "Initializer array count \(count) is outside the static audit limit."
+            case .invalidInitializerPointer(let index, let raw):
+                return String(format: "Initializer #%d has an unsupported ARM-state function pointer 0x%08X.", index, raw)
             case .memoryReadFailed(let address):
                 return String(format: "Could not read initializer data at 0x%08X.", address)
             case .syntheticSelfTestFailed(let detail):
@@ -389,9 +392,14 @@ public enum RE4MachO32InitializerAudit {
             }
             let slot = UInt32(slot64)
             let rawPointer = try readWord(slot, memory: memory)
-            let stateResult = RE4ARMv6InstructionSetState.resolveBX(
-                from: .arm, registerTarget: rawPointer
-            )
+            let stateResult: RE4ARMv6StateTransition
+            do {
+                stateResult = try RE4ARMv6InstructionSetState.resolveBX(
+                    from: .arm, registerTarget: rawPointer
+                )
+            } catch RE4ARMv6InstructionSetStateError.unsupportedARMTargetAlignment(let invalidPointer) {
+                throw AuditError.invalidInitializerPointer(index: index, raw: invalidPointer)
+            }
             let target = stateResult.targetAddress
             let state = stateResult.targetState
             if state == .arm { armCount += 1 } else { thumbCount += 1 }

@@ -250,17 +250,19 @@ struct StageJ814BXBLXInterworkingTests {
             try check(lr == sentinel, "reserved BX encoding changed LR")
         }
 
-        try test("14 Thumb BX with R15 is rejected by the bounded register subset") {
+        try test("14 ARMv6 Thumb BX PC reads PC+4 and branches to the next ARM word") {
             let memory = makeMemory()
-            try memory.write16(0x1000, 0x4778) // BX PC
-            let core = RE4GuestARMv6Core(memory: memory)
-            do {
-                _ = try core.run(
-                    entry: 0x1000, maxSteps: 4, initialInstructionSetState: .thumb
-                )
-                throw NSError(domain: "J8.14", code: 5)
-            } catch RE4GuestRuntimeError.unsupportedThumbInstruction(0x1000, 0x4778) { }
-            try check(core.instructionSetState == .thumb, "BX PC fail-closed gate changed state")
+            try memory.write16(0x1000, 0x4778) // BX PC; T16 PC operand is current address + 4
+            try memory.write32(0x1004, 0xE3A0102A) // MOV R1,#42
+            let (core, result) = try runToStop(
+                memory: memory, entry: 0x1000, initialState: .thumb, stopPC: 0x1008
+            )
+            try check(result.instructionSetState == .arm && result.programCounter == 0x1008,
+                      "Thumb BX PC did not branch to PC+4 in ARM state")
+            let r1 = try core.registerValue(1)
+            let lr = try core.registerValue(14)
+            try check(r1 == 42, "ARM target after Thumb BX PC did not execute")
+            try check(lr == sentinel, "BX PC must preserve LR")
         }
 
         try test("15 Pure resolver validates state, canonical PC and ARM target alignment") {
@@ -279,7 +281,70 @@ struct StageJ814BXBLXInterworkingTests {
             } catch RE4ARMv6InstructionSetStateError.unsupportedARMTargetAlignment(0x3002) { }
         }
 
-        print("RESULT: \(passed)/15 passed; 0 failed")
-        print("SCOPE: real A32/T16 BX/BLX-register state changes and return links; no BXJ, exception return, full CPSR, provider execution or live SJLJ context application.")
+        try test("16 Thumb BLX with R15 is rejected as unpredictable") {
+            let memory = makeMemory()
+            try memory.write16(0x1000, 0x47F8) // BLX PC
+            let core = RE4GuestARMv6Core(memory: memory)
+            do {
+                _ = try core.run(
+                    entry: 0x1000, maxSteps: 4, initialInstructionSetState: .thumb
+                )
+                throw NSError(domain: "J8.14", code: 7)
+            } catch RE4GuestRuntimeError.unsupportedThumbInstruction(0x1000, 0x47F8) { }
+            try check(core.instructionSetState == .thumb,
+                      "unpredictable Thumb BLX PC changed execution state")
+            let lr = try core.registerValue(14)
+            try check(lr == sentinel, "unpredictable Thumb BLX PC changed LR")
+        }
+
+        try test("17 ARM BX PC reads PC+8 and remains in ARM state") {
+            let memory = makeMemory()
+            try memory.write32(0x1000, 0xE12FFF1F) // BX PC
+            try memory.write32(0x1008, 0xE3A0102A) // MOV R1,#42
+            let (core, result) = try runToStop(
+                memory: memory, entry: 0x1000, stopPC: 0x100C
+            )
+            try check(result.instructionSetState == .arm && result.programCounter == 0x100C,
+                      "A32 BX PC did not branch to PC+8")
+            let r1 = try core.registerValue(1)
+            let lr = try core.registerValue(14)
+            try check(r1 == 42, "ARM instruction at PC+8 did not execute")
+            try check(lr == sentinel, "A32 BX PC must preserve LR")
+        }
+
+        try test("18 ARM BLX PC is rejected as unpredictable") {
+            let memory = makeMemory()
+            try memory.write32(0x1000, 0xE12FFF3F) // BLX PC
+            let core = RE4GuestARMv6Core(memory: memory)
+            do {
+                _ = try core.run(entry: 0x1000, maxSteps: 4)
+                throw NSError(domain: "J8.14", code: 8)
+            } catch RE4GuestRuntimeError.unsupportedInstruction(0x1000, 0xE12FFF3F) { }
+            let lr = try core.registerValue(14)
+            try check(lr == sentinel, "unpredictable A32 BLX PC changed LR")
+            try check(core.instructionSetState == .arm,
+                      "unpredictable A32 BLX PC changed execution state")
+        }
+
+        try test("19 Misaligned Thumb BX PC target fails closed without partial state publication") {
+            let memory = makeMemory()
+            try memory.write16(0x1002, 0x4778) // BX PC; T16 PC+4 = 0x1006 (ARM low bits 10)
+            let core = RE4GuestARMv6Core(memory: memory)
+            do {
+                _ = try core.run(
+                    entry: 0x1002, maxSteps: 4, initialInstructionSetState: .thumb
+                )
+                throw NSError(domain: "J8.14", code: 9)
+            } catch RE4GuestRuntimeError.unsupportedARMBranchTargetAlignment(0x1006) { }
+            try check(core.instructionSetState == .thumb,
+                      "unpredictable Thumb BX PC target changed instruction state")
+            let lr = try core.registerValue(14)
+            try check(lr == sentinel, "BX PC must not modify LR on invalid target")
+            try check(try core.registerValue(15) == 0x1004,
+                      "failed BX PC did not retain fetch-then-decode PC behavior")
+        }
+
+        print("RESULT: \(passed)/19 passed; 0 failed")
+        print("SCOPE: actual A32/T16 BX/BLX-register interworking, PC operands, LR return links and invalid-target failure atomicity. BLX PC, BXJ, exception return, full CPSR, provider execution and live SJLJ context application remain outside this stage.")
     }
 }
