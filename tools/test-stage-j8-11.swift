@@ -129,7 +129,8 @@ struct StageJ811CoreArchitecturalStateTests {
                 _ = try core.prepareArchitecturalStateCommit(makeCandidate(count: 15))
                 throw NSError(domain: "J8.11", code: 2)
             } catch RE4StageJ811CommitError.invalidRegisterFileCount(15) { }
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(after == before,
                       "invalid candidate partially changed the core")
         }
 
@@ -141,7 +142,8 @@ struct StageJ811CoreArchitecturalStateTests {
                 _ = try core.prepareArchitecturalStateCommit(makeCandidate(pc: 0x2002))
                 throw NSError(domain: "J8.11", code: 3)
             } catch RE4StageJ811CommitError.programCounterNotWordAligned(0x2002) { }
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(after == before,
                       "unaligned PC changed the source state")
         }
 
@@ -153,7 +155,8 @@ struct StageJ811CoreArchitecturalStateTests {
                 _ = try core.prepareArchitecturalStateCommit(makeCandidate(sp: 0x1E002))
                 throw NSError(domain: "J8.11", code: 4)
             } catch RE4StageJ811CommitError.stackPointerNotWordAligned(0x1E002) { }
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(after == before,
                       "unaligned SP changed the source state")
         }
 
@@ -166,7 +169,8 @@ struct StageJ811CoreArchitecturalStateTests {
                     makeCandidate(mode: .thumb16Required))
                 throw NSError(domain: "J8.11", code: 5)
             } catch RE4StageJ811CommitError.thumbExecutionUnsupported { }
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(after == before,
                       "Thumb rejection changed the source state")
         }
 
@@ -179,7 +183,8 @@ struct StageJ811CoreArchitecturalStateTests {
                     makeCandidate(cpsr: .fullCPSR))
                 throw NSError(domain: "J8.11", code: 6)
             } catch RE4StageJ811CommitError.fullCPSRRestoreUnsupported { }
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(after == before,
                       "full-CPSR rejection changed the source state")
         }
 
@@ -192,7 +197,8 @@ struct StageJ811CoreArchitecturalStateTests {
                     makeCandidate(vfp: .d8ThroughD15Required))
                 throw NSError(domain: "J8.11", code: 7)
             } catch RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported { }
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(after == before,
                       "VFP rejection changed the source state")
         }
 
@@ -206,7 +212,8 @@ struct StageJ811CoreArchitecturalStateTests {
                 _ = try core.commitArchitecturalStateAtomically(prepared)
                 throw NSError(domain: "J8.11", code: 8)
             } catch RE4StageJ811CommitError.sourceStateChangedBeforeCommit { }
-            try check(try core.captureArchitecturalStateSnapshot() == changed,
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(after == changed,
                       "stale transaction overwrote newer Core state")
         }
 
