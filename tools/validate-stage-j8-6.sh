@@ -31,3 +31,5 @@ swiftc -parse-as-library -emit-module -module-name StageJ86ReleaseCompile \
   "$ROOT/RE4MCTPreview/RE4StageJ86ForcedResumeChainModel.swift" \
   -emit-module-path "$TMP/StageJ86ReleaseCompile.swiftmodule"
 echo "RELEASE-MODE COMPILE: PASS"
+# Validate provider-derived stop-callback ABI and pthread TSD transitions.
+bash "$ROOT/tools/validate-stage-j8-7.sh"
