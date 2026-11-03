@@ -56,8 +56,9 @@ struct StageJ87ProviderABITests {
             tsd.createKey()
             _ = try tsd.register(address:0x7100)
             _ = try tsd.register(address:0x7200)
-            try check(try tsd.unregister(address:0x7200) == 0x7100 &&
-                      tsd.top == 0x7100, "unregister did not restore predecessor")
+            let restored = try tsd.unregister(address:0x7200)
+            try check(restored == 0x7100 && tsd.top == 0x7100,
+                      "unregister did not restore predecessor")
         }
 
         try test("06 forced walk end-of-stack leaves TSD top unchanged") {
@@ -90,7 +91,8 @@ struct StageJ87ProviderABITests {
             _ = try tsd.register(address:0x7200)
             _ = try tsd.forcedWalk { _ in .continueUnwind }
             try check(tsd.top == 0x7200, "provider EOS boundary changed TSD")
-            try check(try tsd.unregister(address:0x7200) == 0x7100,
+            let restored = try tsd.unregister(address:0x7200)
+            try check(restored == 0x7100,
                       "caller-side Unregister was not modeled separately")
         }
 
