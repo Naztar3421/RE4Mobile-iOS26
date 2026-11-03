@@ -28,7 +28,7 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
         case .writeExecuteRegionDenied(let name):
             return "Guest Memory region \(name) requests writable and executable permissions (W^X denied)."
         case .heapExhausted: return "Guest heap exhausted."
-        case .invalidVFPDoubleRegister(let index): return "Invalid VFP double-register index D\\(index); only D8-D15 are modeled."
+        case .invalidVFPDoubleRegister(let index): return "Invalid VFP double-register index D\(index); only D8-D15 are modeled."
         case .vfpStackPointerUnderflow(let address):
             return String(format: "VFP stack push underflows SP=0x%08X.", address)
         case .vfpStackPointerOverflow(let address):
