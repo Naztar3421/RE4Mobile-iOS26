@@ -176,3 +176,17 @@ Not yet established by this checkpoint:
 4. Compare all J.8.5/J.8.6 transition assumptions against the provider state machine before designing the Guest CPU context adapter.
 
 No provider routine, callback, pthread function, Res4 initializer, ARM instruction stream or live Guest context was executed by this audit. Runtime readiness remains **NOT READY TO ENTER**.
+
+## Host model implementation checkpoint
+
+The provider-derived host model and regression harness have now been added:
+
+- `RE4MCTPreview/RE4StageJ87ProviderABIModel.swift`
+- `tools/test-stage-j8-7.swift`
+- `tools/validate-stage-j8-7.sh`
+
+The callback record explicitly carries the raw callback token, version 1, actions 10, both exception-class words, exception-object pointer, current frame/context pointer, and private_2 stop parameter. It exposes the AAPCS32 register and stack argument order separately and only classifies a supplied synthetic return code; it never invokes the raw callback.
+
+The TSD model separately represents key creation, Register, Unregister, forced traversal, InstallContext publication, end-of-stack return, and caller-side Unregister. The J.8.7 validator is now chained after J.8.6 in the existing CI validation path.
+
+CI result for this new implementation is pending at the time of this documentation update. No PASS is claimed until the workflow reports the J.8.7 test and Release compile steps successful.
