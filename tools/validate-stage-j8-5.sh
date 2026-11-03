@@ -29,3 +29,5 @@ swiftc -parse-as-library -emit-module -module-name StageJ85ReleaseCompile \
   "$ROOT/RE4MCTPreview/RE4StageJ85ForcedResumeCompletionModel.swift" \
   -emit-module-path "$TMP/StageJ85ReleaseCompile.swiftmodule"
 echo "RELEASE-MODE COMPILE: PASS"
+# Extend CI with the repeated forced-Resume chain regression suite.
+bash "$ROOT/tools/validate-stage-j8-6.sh"
