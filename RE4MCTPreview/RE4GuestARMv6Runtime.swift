@@ -8,6 +8,9 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
     case writeExecuteRegionDenied(String)
     case heapExhausted
     case invalidRegister(Int)
+    case invalidVFPDoubleRegister(Int)
+    case vfpStackPointerUnderflow(UInt32)
+    case vfpStackPointerOverflow(UInt32)
     case unsupportedInstruction(pc: UInt32, word: UInt32)
     case stepLimit(limit: Int, pc: UInt32)
     case didNotReturn(pc: UInt32)
@@ -25,6 +28,11 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
         case .writeExecuteRegionDenied(let name):
             return "Guest Memory region \(name) requests writable and executable permissions (W^X denied)."
         case .heapExhausted: return "Guest heap exhausted."
+        case .invalidVFPDoubleRegister(let index): return "Invalid VFP double-register index D\\(index); only D8-D15 are modeled."
+        case .vfpStackPointerUnderflow(let address):
+            return String(format: "VFP stack push underflows SP=0x%08X.", address)
+        case .vfpStackPointerOverflow(let address):
+            return String(format: "VFP stack pop overflows SP=0x%08X.", address)
         case .invalidRegister(let index): return "Invalid ARM register index \(index)."
         case .unsupportedInstruction(let pc, let word):
             return String(format: "Unsupported ARMv6 instruction 0x%08X at 0x%08X.", word, pc)
@@ -363,6 +371,21 @@ public struct RE4StageJ811ConditionFlags: Equatable {
     }
 }
 
+public enum RE4StageJ812VFPError: Error, Equatable {
+    case invalidDoubleRegisterCount(Int)
+}
+
+public struct RE4StageJ812VFPRegisterSnapshot: Equatable {
+    public let d8ThroughD15: [UInt64]
+
+    public init(d8ThroughD15: [UInt64]) throws {
+        guard d8ThroughD15.count == 8 else {
+            throw RE4StageJ812VFPError.invalidDoubleRegisterCount(d8ThroughD15.count)
+        }
+        self.d8ThroughD15 = d8ThroughD15
+    }
+}
+
 public enum RE4StageJ811ExecutionMode: String, Equatable {
     /// Operational mode of the current interpreter, not a sampled CPSR.T bit.
     case arm32Interpreter
@@ -386,7 +409,8 @@ public enum RE4StageJ811CPSRRestoreRequest: String, Equatable {
 
 public enum RE4StageJ811VFPRestoreRequirement: String, Equatable {
     case notRequired
-    case d8ThroughD15Required
+    case d8ThroughD15RequiredByGuestEpilogue
+    case d8ThroughD15RequiredInCPUContext
 }
 
 public enum RE4StageJ811CommitError: Error, Equatable {
@@ -453,7 +477,8 @@ public struct RE4StageJ811CPUStateCandidate: Equatable {
     }
 
     func validate(
-        against source: RE4StageJ811CPUStateSnapshot
+        against source: RE4StageJ811CPUStateSnapshot,
+        supportsGuestEpilogueVFPStackTransfers: Bool
     ) throws -> RE4StageJ811ValidatedCPUStateCommit {
         guard registers.count == 16 else {
             throw RE4StageJ811CommitError.invalidRegisterFileCount(registers.count)
@@ -470,7 +495,14 @@ public struct RE4StageJ811CPUStateCandidate: Equatable {
         guard cpsrRestoreRequest == .modeledNZCVOnly else {
             throw RE4StageJ811CommitError.fullCPSRRestoreUnsupported
         }
-        guard vfpRestoreRequirement == .notRequired else {
+        switch vfpRestoreRequirement {
+        case .notRequired:
+            break
+        case .d8ThroughD15RequiredByGuestEpilogue:
+            guard supportsGuestEpilogueVFPStackTransfers else {
+                throw RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported
+            }
+        case .d8ThroughD15RequiredInCPUContext:
             throw RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported
         }
         return RE4StageJ811ValidatedCPUStateCommit(
@@ -526,6 +558,46 @@ public final class RE4GuestARMv6Core {
         self.instructionHook = instructionHook
     }
 
+    /// Implemented for the exact D8-D15 VPUSH/VPOP encodings used by #101.
+    public var supportsVFPD8ThroughD15StackTransfers: Bool { true }
+
+    /// D8-D15 map to S16-S31, two consecutive 32-bit words per D register.
+    public func vfpDoubleRegisterValue(_ index: Int) throws -> UInt64 {
+        guard (8...15).contains(index) else {
+            throw RE4GuestRuntimeError.invalidVFPDoubleRegister(index)
+        }
+        let sIndex = 16 + (index - 8) * 2
+        return (UInt64(vfpS[sIndex + 1]) << 32) | UInt64(vfpS[sIndex])
+    }
+
+    public func setVFPDoubleRegisterValue(_ index: Int, value: UInt64) throws {
+        guard (8...15).contains(index) else {
+            throw RE4GuestRuntimeError.invalidVFPDoubleRegister(index)
+        }
+        let sIndex = 16 + (index - 8) * 2
+        vfpS[sIndex] = UInt32(truncatingIfNeeded: value)
+        vfpS[sIndex + 1] = UInt32(truncatingIfNeeded: value >> 32)
+    }
+
+    /// VFP bank snapshot is separate from the J.8.11 GPR/NZCV snapshot.
+    public func captureVFPD8ThroughD15Snapshot() throws -> RE4StageJ812VFPRegisterSnapshot {
+        let values = try (8...15).map { try vfpDoubleRegisterValue($0) }
+        return try RE4StageJ812VFPRegisterSnapshot(d8ThroughD15: values)
+    }
+
+    public func restoreVFPD8ThroughD15Snapshot(
+        _ snapshot: RE4StageJ812VFPRegisterSnapshot
+    ) throws {
+        guard snapshot.d8ThroughD15.count == 8 else {
+            throw RE4StageJ812VFPError.invalidDoubleRegisterCount(snapshot.d8ThroughD15.count)
+        }
+        for (offset, value) in snapshot.d8ThroughD15.enumerated() {
+            let sIndex = 16 + offset * 2
+            vfpS[sIndex] = UInt32(truncatingIfNeeded: value)
+            vfpS[sIndex + 1] = UInt32(truncatingIfNeeded: value >> 32)
+        }
+    }
+
     /// Captures only the architectural state that this interpreter actually models.
     /// This is not a complete CPSR image and does not claim to capture VFP D8-D15.
     public func captureArchitecturalStateSnapshot() throws -> RE4StageJ811CPUStateSnapshot {
@@ -543,7 +615,10 @@ public final class RE4GuestARMv6Core {
         _ candidate: RE4StageJ811CPUStateCandidate
     ) throws -> RE4StageJ811ValidatedCPUStateCommit {
         let source = try captureArchitecturalStateSnapshot()
-        return try candidate.validate(against: source)
+        return try candidate.validate(
+            against: source,
+            supportsGuestEpilogueVFPStackTransfers: supportsVFPD8ThroughD15StackTransfers
+        )
     }
 
     /// Phase 2: compare the preflight source snapshot, then commit all modeled
@@ -834,9 +909,52 @@ public final class RE4GuestARMv6Core {
         if let loadedPC { registers[15] = loadedPC }
     }
 
+    /// VPUSH {D8-D15}: VSTMDB SP!, storing ascending D registers at new SP.
+    /// Guest Memory validates the complete 64-byte range before SP is published.
+    private func executeVFPStackPushD8ThroughD15() throws {
+        let oldSP = registers[13]
+        let (newSP, overflow) = oldSP.subtractingReportingOverflow(64)
+        guard !overflow else { throw RE4GuestRuntimeError.vfpStackPointerUnderflow(oldSP) }
+
+        var payload = Data()
+        payload.reserveCapacity(64)
+        for sIndex in 16..<32 {
+            let word = vfpS[sIndex]
+            payload.append(UInt8(word & 0xFF))
+            payload.append(UInt8((word >> 8) & 0xFF))
+            payload.append(UInt8((word >> 16) & 0xFF))
+            payload.append(UInt8((word >> 24) & 0xFF))
+        }
+        try memory.writeBytes(at: newSP, data: payload)
+        registers[13] = newSP
+    }
+
+    /// VPOP {D8-D15}: VLDMIA SP!, stage the complete memory image before apply.
+    private func executeVFPStackPopD8ThroughD15() throws {
+        let oldSP = registers[13]
+        let (newSP, overflow) = oldSP.addingReportingOverflow(64)
+        guard !overflow else { throw RE4GuestRuntimeError.vfpStackPointerOverflow(oldSP) }
+        let payload = [UInt8](try memory.copyBytes(at: oldSP, count: 64))
+        var restored = [UInt32]()
+        restored.reserveCapacity(16)
+        for offset in 0..<16 {
+            let base = offset * 4
+            restored.append(
+                UInt32(payload[base]) |
+                (UInt32(payload[base + 1]) << 8) |
+                (UInt32(payload[base + 2]) << 16) |
+                (UInt32(payload[base + 3]) << 24)
+            )
+        }
+        for offset in 0..<16 {
+            vfpS[16 + offset] = restored[offset]
+        }
+        registers[13] = newSP
+    }
+
     private func executeLegacyVFP(_ word: UInt32, pc: UInt32) throws -> Bool {
-        if word == 0xED2D8B10 { registers[13] = registers[13] &- 64; return true }
-        if word == 0xECBD8B10 { registers[13] = registers[13] &+ 64; return true }
+        if word == 0xED2D8B10 { try executeVFPStackPushD8ThroughD15(); return true }
+        if word == 0xECBD8B10 { try executeVFPStackPopD8ThroughD15(); return true }
         if pc == 0x16B80 && word == 0xED2D8B02 {
             registers[13] = registers[13] &- 8
             try memory.write32(registers[13], vfpS[16])
