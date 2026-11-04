@@ -42,8 +42,5 @@ swiftc -parse-as-library -emit-module \
 echo "RELEASE-MODE COMPILE: PASS"
 echo "BX/BLX INTERWORKING: A32/T16 decode, target-state publication, canonical PC and source-state LR"
 
-# Stage J.8.15: apply only a prepared synthetic #101 context to the bounded Core.
-bash "$ROOT/tools/validate-stage-j8-15.sh"
-
 # Stage J.8.15: gated synthetic InstallContext-to-Core application.
 bash "$ROOT/tools/validate-stage-j8-15.sh"
