@@ -347,10 +347,10 @@ struct StageJ811CoreArchitecturalStateTests {
                 makeCandidate(mode: .thumb16Required, pc: 0x2000))
             _ = try core.commitArchitecturalStateAtomically(toThumb)
             let changed = try core.captureArchitecturalStateSnapshot()
-            try check(changed.registers == staleARM.expectedSource.registers &&
-                      changed.flags == staleARM.expectedSource.flags &&
-                      changed.executionMode != staleARM.expectedSource.executionMode,
-                      "test precondition failed: source differences must be mode-only")
+            try check(changed.registers == staleARM.registers &&
+                      changed.flags == staleARM.flags &&
+                      changed.executionMode != staleARM.executionMode,
+                      "test precondition failed: committed GPR/NZCV must match the stale token; only active mode may differ")
             do {
                 _ = try core.commitArchitecturalStateAtomically(staleARM)
                 throw NSError(domain: "J8.11", code: 12)
