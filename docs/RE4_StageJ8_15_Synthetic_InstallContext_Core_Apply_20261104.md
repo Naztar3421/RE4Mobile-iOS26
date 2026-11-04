@@ -46,3 +46,19 @@ The J.8.11 transaction continues to enforce its existing gates: 16 GPRs, PC alig
 
 Overall Guest Runtime readiness remains **NOT READY TO ENTER**.
 
+
+## CI result — 2026-11-04
+
+GitHub Actions [Run #215](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41840540087)
+completed with **SUCCESS** on branch head `c48a27517f62c01d4e9c9fa2cff5ebde7dc3b9a8`.
+
+- J.8.15 synthetic integration tests: **4/4 PASS**.
+- J.8.15 Release-mode Swift module compile: **PASS**.
+- J.8.5 umbrella validation, including J.8.6-J.8.15: **PASS**.
+- Unsigned iOS app build, IPA packaging and artifact upload: **PASS**.
+- IPA artifact ID: `13329451033`; size: 1,014,826 bytes; SHA-256:
+  `77a901e7b3892afab84932378c4ad2f9e0e8324aba89a3c961476eaccbbcf555`.
+
+The CI result proves only the bounded synthetic projection/commit/marker path
+specified above. No original provider/game code or runtime lifecycle is run.
+Global Guest Runtime readiness remains **NOT READY TO ENTER**.

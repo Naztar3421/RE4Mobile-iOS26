@@ -112,3 +112,23 @@ the previously prepared ARM token solely because the active execution mode chang
 This CI success validates the bounded Core state transaction, not execution of
 the original provider's BX, pthread TSD, personality, unwinder, or initializer.
 Global Guest Runtime readiness remains **NOT READY TO ENTER**.
+
+
+## J.8.15 integration follow-up — 2026-11-04
+
+The J.8.10 immutable #101 successor-context projection has now been connected
+to the J.8.11 Core transaction in a gated synthetic harness. J.8.15 applies
+the prepared candidate, then executes one generated ARM or Thumb marker in an
+otherwise synthetic Guest Memory and stops at the next PC before another
+instruction fetch. The harness also rejects frame-identity mismatch and an
+unpredictable ARM BX operand before Core mutation.
+
+GitHub Actions [Run #215](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41840540087)
+completed **SUCCESS**: J.8.15 **4/4**, Release-mode compile PASS, complete
+J.8.5 umbrella through J.8.15 PASS, unsigned app/IPA PASS.
+Artifact ID `13329451033`; SHA-256
+`77a901e7b3892afab84932378c4ad2f9e0e8324aba89a3c961476eaccbbcf555`.
+
+This is not execution of the original provider BX, SJLJ Resume, personality,
+stop callback, pthread TSD, destructor, or initializer. The J.8.10 adapter
+remains data-only. Global Guest Runtime readiness remains **NOT READY TO ENTER**.

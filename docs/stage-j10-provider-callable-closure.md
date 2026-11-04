@@ -195,3 +195,19 @@ still have **0/7 explicit HLE implementations**. No provider pointer is thereby
 made callable; pthread TSD, target callbacks, personality/unwinder execution,
 C++ object/allocator lifecycle and live context transfer remain unresolved.
 SJLJ executable runtime remains **BLOCKED** and Guest Runtime remains **NOT READY**.
+
+
+## 2026-11-04 bounded Core follow-up
+
+Later bounded Core milestones now include J.8.11's mode-aware GPR/NZCV/ARM-
+Thumb transaction (17/17 plus Release compile) and J.8.15's synthetic #101
+InstallContext-to-Core bridge (4/4 plus Release compile). Full GitHub Actions
+[Run #215](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41840540087)
+completed **SUCCESS**, including app/IPA packaging.
+
+These capabilities do not close the provider inventory. The seven direct
+provider imports remain **0/7 explicit HLE implementations**; none is
+established as guest-callable by the synthetic tests. Live pthread TSD,
+callbacks, personality/unwinder, C++ object/allocator closure and original
+context-transfer execution remain unresolved. Global Guest Runtime remains
+**NOT READY TO ENTER**.

@@ -100,3 +100,17 @@ bounded synthetic Core capabilities. They do not execute the original
 provider's InstallContext BX, personality, unwinder, pthread TSD, callbacks,
 or initializers. The SJLJ executable runtime gate remains **BLOCKED** and the
 global Guest Runtime gate remains **NOT READY**.
+
+
+## 2026-11-04 J.8.11/J.8.15 synthetic Core integration status
+
+J.8.11 now passes 17/17 ARM/Thumb architectural-state transaction tests and
+Release-mode compile; J.8.15 passes 4/4 synthetic InstallContext-to-Core tests
+and Release-mode compile. Full GitHub Actions [Run #215](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41840540087)
+completed **SUCCESS**, including the complete J.8.5-J.8.15 umbrella and
+unsigned iOS App/IPA packaging.
+
+J.8.15 executes only a test-authored ARM/Thumb marker in synthetic Guest
+Memory and stops before the next fetch. It does not execute the original
+provider BX or any SJLJ/provider/game function. SJLJ executable runtime
+remains **BLOCKED**; global Guest Runtime remains **NOT READY**.
