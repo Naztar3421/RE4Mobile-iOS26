@@ -177,7 +177,8 @@ struct StageJ811CoreArchitecturalStateTests {
                     makeCandidate(mode: .thumb16Required, pc: 0x2003))
                 throw NSError(domain: "J8.11", code: 5)
             } catch RE4StageJ811CommitError.programCounterNotWordAligned(0x2003) { }
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let afterInvalidThumbPC = try core.captureArchitecturalStateSnapshot()
+            try check(afterInvalidThumbPC == before,
                       "invalid Thumb PC changed the source state")
         }
 
@@ -262,7 +263,8 @@ struct StageJ811CoreArchitecturalStateTests {
             let prepared = try core.prepareArchitecturalStateCommit(candidate)
             try check(prepared.executionMode == .thumb16Required,
                       "Thumb mode was not carried into the validated commit token")
-            try check(try core.captureArchitecturalStateSnapshot() == before,
+            let afterPreflight = try core.captureArchitecturalStateSnapshot()
+            try check(afterPreflight == before,
                       "J.8.10 candidate preflight changed live Core state")
         }
 
@@ -326,7 +328,8 @@ struct StageJ811CoreArchitecturalStateTests {
             _ = try core.commitArchitecturalStateAtomically(thumb)
             _ = try core.step()
             let after = try core.captureArchitecturalStateSnapshot()
-            try check(try core.registerValue(0) == 7,
+            let r0 = try core.registerValue(0)
+            try check(r0 == 7,
                       "Thumb MOVS did not execute after the mode-aware commit")
             try check(after.executionMode == .thumb16Required && after.pc == 0x2004,
                       "Thumb fetch must advance the canonical PC by two bytes")
@@ -347,7 +350,8 @@ struct StageJ811CoreArchitecturalStateTests {
                 _ = try core.commitArchitecturalStateAtomically(staleARM)
                 throw NSError(domain: "J8.11", code: 12)
             } catch RE4StageJ811CommitError.sourceStateChangedBeforeCommit { }
-            try check(try core.captureArchitecturalStateSnapshot() == changed &&
+            let afterStaleCommit = try core.captureArchitecturalStateSnapshot()
+            try check(afterStaleCommit == changed &&
                       core.instructionSetState == .thumb,
                       "stale ARM token overwrote a newer Thumb execution state")
         }
