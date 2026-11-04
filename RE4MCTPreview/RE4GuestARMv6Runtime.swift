@@ -406,9 +406,9 @@ public struct RE4StageJ812VFPRegisterSnapshot: Equatable {
 }
 
 public enum RE4StageJ811ExecutionMode: String, Equatable {
-    /// Operational mode of the current interpreter, not a sampled CPSR.T bit.
+    /// Bounded 32-bit ARM instruction interpreter state.
     case arm32Interpreter
-    /// An explicit request for the unimplemented Thumb execution path.
+    /// Bounded 16-bit Thumb-1 instruction interpreter state.
     case thumb16Required
 }
 
@@ -436,7 +436,6 @@ public enum RE4StageJ811CommitError: Error, Equatable {
     case invalidRegisterFileCount(Int)
     case programCounterNotWordAligned(UInt32)
     case stackPointerNotWordAligned(UInt32)
-    case thumbExecutionUnsupported
     case fullCPSRRestoreUnsupported
     case vfpD8ThroughD15RestoreUnsupported
     case sourceStateChangedBeforeCommit
@@ -513,11 +512,15 @@ public struct RE4StageJ811CPUStateCandidate: Equatable {
         guard registers.count == 16 else {
             throw RE4StageJ811CommitError.invalidRegisterFileCount(registers.count)
         }
-        guard executionMode == .arm32Interpreter else {
-            throw RE4StageJ811CommitError.thumbExecutionUnsupported
-        }
-        guard (registers[15] & 0x3) == 0 else {
-            throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+        switch executionMode {
+        case .arm32Interpreter:
+            guard (registers[15] & 0x3) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
+        case .thumb16Required:
+            guard (registers[15] & 0x1) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
         }
         guard (registers[13] & 0x3) == 0 else {
             throw RE4StageJ811CommitError.stackPointerNotWordAligned(registers[13])
@@ -536,7 +539,8 @@ public struct RE4StageJ811CPUStateCandidate: Equatable {
             throw RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported
         }
         return RE4StageJ811ValidatedCPUStateCommit(
-            expectedSource: source, registers: registers, flags: flags
+            expectedSource: source, registers: registers, flags: flags,
+            executionMode: executionMode
         )
     }
 }
@@ -546,21 +550,25 @@ public struct RE4StageJ811ValidatedCPUStateCommit {
     let expectedSource: RE4StageJ811CPUStateSnapshot
     let registers: [UInt32]
     let flags: RE4StageJ811ConditionFlags
+    let executionMode: RE4StageJ811ExecutionMode
 
     init(
         expectedSource: RE4StageJ811CPUStateSnapshot,
         registers: [UInt32],
-        flags: RE4StageJ811ConditionFlags
+        flags: RE4StageJ811ConditionFlags,
+        executionMode: RE4StageJ811ExecutionMode
     ) {
         self.expectedSource = expectedSource
         self.registers = registers
         self.flags = flags
+        self.executionMode = executionMode
     }
 }
 
 public struct RE4StageJ811CommitReceipt: Equatable {
     public let committedGeneralRegisterCount: Int
     public let committedNZCV: Bool
+    public let committedExecutionMode: RE4StageJ811ExecutionMode
     public let restoredFullCPSR: Bool
     public let restoredVFPD8ThroughD15: Bool
     public let guestInstructionsExecuted: Bool
@@ -649,9 +657,8 @@ public final class RE4GuestARMv6Core {
     public func prepareArchitecturalStateCommit(
         _ candidate: RE4StageJ811CPUStateCandidate
     ) throws -> RE4StageJ811ValidatedCPUStateCommit {
-        guard instructionSetState == .arm else {
-            throw RE4StageJ811CommitError.thumbExecutionUnsupported
-        }
+        // Both bounded ARM and Thumb execution states are representable by this Core.
+        // The captured source mode becomes part of the stale-token comparison.
         let source = try captureArchitecturalStateSnapshot()
         return try candidate.validate(
             against: source,
@@ -679,10 +686,12 @@ public final class RE4GuestARMv6Core {
         zero = prepared.flags.zero
         carry = prepared.flags.carry
         overflow = prepared.flags.overflow
+        instructionSetState = prepared.executionMode == .arm32Interpreter ? .arm : .thumb
 
         return RE4StageJ811CommitReceipt(
             committedGeneralRegisterCount: 16,
             committedNZCV: true,
+            committedExecutionMode: prepared.executionMode,
             restoredFullCPSR: false,
             restoredVFPD8ThroughD15: false,
             guestInstructionsExecuted: false
