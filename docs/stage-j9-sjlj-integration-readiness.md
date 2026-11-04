@@ -54,7 +54,7 @@ Run #41498238621 passed every J.6–J.8.5 validation step, the unsigned app buil
 7. **General exception support:** the model covers only the #101 cleanup-only zero-action LSDA. Typed catches, action chains and arbitrary personality profiles remain unsupported.
 8. **Whole-program startup:** #101 evidence does not execute the 240 initializers or complete dyld, C++ or Objective-C/process lifecycle requirements.
 
-The repository also records that its ARM core does not yet implement Thumb CPSR state or Thumb instruction decoding. Static ARM/Thumb pointer classification is not callable-provider support.
+The sentence above describes the original J.9 baseline and is superseded by the later bounded Core work: J.8.13 added a limited Thumb-1 fetch/decode path, J.8.14 added actual in-Core register BX/BLX interworking, and the J.8.11 mode-aware transaction is now implemented on the feature branch. These are bounded interpreter capabilities only; they do not implement a complete CPSR, execute the original provider's BX, or close the callable-provider/TSD/personality dependencies. J.8.11 CI validation is pending.
 
 ## Gate policy
 
