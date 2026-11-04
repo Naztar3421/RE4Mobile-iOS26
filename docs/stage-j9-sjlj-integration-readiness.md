@@ -84,3 +84,19 @@ The subsequent provider audits and host models extend the earlier J.9 review:
 J.8.10 remains a data-only adapter contract: it does not mutate the core or execute BX. The current core still lacks Thumb fetch/decode/state, an atomic architectural-state snapshot/commit API, full CPSR representation, and actual VFP D8–D15 stack payload transfers (its legacy VFP push/pop handlers currently adjust SP only). These are executable-runtime blockers.
 
 The J.8.10 local regression suite reports 13/13 and Release-mode compile PASS. The validator is chained after J.8.9. This does not change the gate decision: SJLJ executable runtime remains BLOCKED and global Guest Runtime remains NOT READY.
+
+
+## 2026-11-04 superseding Core capability update
+
+The older baseline notes above predate the bounded ARM/Thumb Core milestones.
+J.8.13 provides the limited Thumb-1 instruction subset; J.8.14 implements
+register-form BX/BLX interworking in the Guest Core; and J.8.11 now carries the
+bounded execution mode through the GPR/NZCV two-phase commit transaction.
+
+GitHub Actions Run [#212](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41839376228)
+completed **SUCCESS** with J.8.11 **17/17**, Release-mode compile PASS, the
+full J.8.5 umbrella chain PASS, and unsigned app/IPA build PASS. These remain
+bounded synthetic Core capabilities. They do not execute the original
+provider's InstallContext BX, personality, unwinder, pthread TSD, callbacks,
+or initializers. The SJLJ executable runtime gate remains **BLOCKED** and the
+global Guest Runtime gate remains **NOT READY**.

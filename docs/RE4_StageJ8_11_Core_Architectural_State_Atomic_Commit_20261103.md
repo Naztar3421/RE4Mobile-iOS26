@@ -80,8 +80,10 @@ The transaction now:
   throwing operation after the first publication;
 - reports the committed mode in the receipt.
 
-The updated regression suite is 17/17 in the local validator target once CI
-confirms it. The post-commit Thumb fetch case writes a synthetic MOVS halfword
+The updated regression suite passed 17/17 in GitHub Actions Run #212, including
+an independent Release-mode compile. The full workflow also passed the J.8.5
+umbrella chain (J.8.6-J.8.14), unsigned iOS Release build, IPA packaging and
+artifact upload. The post-commit Thumb fetch case writes a synthetic MOVS halfword
 to Guest Memory, commits Thumb mode, performs one Core step, and checks R0
 plus the two-byte PC advance. This is still a synthetic Core test: no provider
 function, original SJLJ BX, callback, pthread operation, or initializer runs.
@@ -90,3 +92,23 @@ J.8.10 remains an immutable projection until a separate gated integration
 harness explicitly submits one prepared #101 context to the Core and stops
 before any original provider/game code. Global runtime readiness remains
 NOT READY TO ENTER.
+
+
+## CI confirmation — 2026-11-04
+
+- GitHub Actions Run [#212](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41839376228): **SUCCESS**.
+- J.8.11 architectural-state suite: **17/17 PASS**.
+- J.8.11 Release-mode Swift module compile: **PASS**.
+- All preceding MCT, Mach-O, C++ ABI, J.4, J.6, J.7 and J.8-J.8.5 umbrella validations: **PASS**.
+- Unsigned iOS app build, IPA packaging and artifact upload: **PASS**.
+- Code/test head: `1348642a6de9966a7ffe6fd20dfc4da22819ec4b`.
+- IPA artifact ID: `13328820353`; size: 1,014,823 bytes; SHA-256:
+  `677444cee5b6359cf38a3aa7f0874b195090e1c146490ce3981f2cb06bf46bb5`.
+
+Test 17 confirms the mode token independently: the ARM and Thumb target candidates
+carry identical GPR/NZCV values, and applying the Thumb candidate invalidates
+the previously prepared ARM token solely because the active execution mode changed.
+
+This CI success validates the bounded Core state transaction, not execution of
+the original provider's BX, pthread TSD, personality, unwinder, or initializer.
+Global Guest Runtime readiness remains **NOT READY TO ENTER**.

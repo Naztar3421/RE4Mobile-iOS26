@@ -178,3 +178,20 @@ This report consolidates the existing repository docs and generated static evide
 The J.5 provider trace is used for internal routine identities; the J.7 INSTALL_CONTEXT correction supersedes the earlier frame-unlink wording. Missing addresses/states and caller live-ins are deliberately left unresolved rather than inferred from an even VA or a mapped provider pointer.
 
 **J.10 conclusion:** seven direct provider imports have a cross-referenced address/state/ABI inventory, and their major transitive dependencies are enumerated. Static provider mapping is established; callable runtime closure is not. SJLJ executable runtime remains BLOCKED. GUEST_RUNTIME_ENTRY_GATE remains NOT READY.
+
+
+## 2026-11-04 superseding Core capability update
+
+The Core limitations in the reviewed J.10 baseline above have been partially
+advanced by later bounded stages: J.8.13 adds a limited Thumb-1 fetch/decode
+path; J.8.14 adds in-Core register BX/BLX interworking; and J.8.11 adds a
+failure-atomic GPR/NZCV/ARM-Thumb-mode state transaction.
+
+GitHub Actions Run [#212](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41839376228)
+completed **SUCCESS**, including J.8.11 **17/17**, Release-mode compile,
+the J.8.5-to-J.8.14 validation chain, and unsigned iOS app/IPA packaging.
+This does not change the J.10 provider-closure result: seven direct imports
+still have **0/7 explicit HLE implementations**. No provider pointer is thereby
+made callable; pthread TSD, target callbacks, personality/unwinder execution,
+C++ object/allocator lifecycle and live context transfer remain unresolved.
+SJLJ executable runtime remains **BLOCKED** and Guest Runtime remains **NOT READY**.
