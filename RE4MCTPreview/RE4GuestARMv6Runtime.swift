@@ -374,7 +374,7 @@ public struct RE4GuestARMv6RunResult {
     }
 }
 
-/// Stage J.8.11: the exact CPU-state subset owned by this ARM-only interpreter.
+/// Stage J.8.11: the exact GPR/NZCV and bounded ARM/Thumb mode subset owned by this Core.
 /// Kept beside the Core so standalone Core validators compile the same contract.
 public struct RE4StageJ811ConditionFlags: Equatable {
     public let negative: Bool
@@ -667,7 +667,8 @@ public final class RE4GuestARMv6Core {
     }
 
     /// Phase 2: compare the preflight source snapshot, then commit all modeled
-    /// GPRs and NZCV. There are no throwing operations after the first assignment.
+    /// GPRs, NZCV and bounded ARM/Thumb mode. No operation after the first
+    /// assignment can throw.
     /// The core is single-execution-thread confined; this is failure-atomic, not
     /// a cross-thread synchronization primitive.
     @discardableResult
@@ -708,8 +709,9 @@ public final class RE4GuestARMv6Core {
         registers[index] = value
     }
 
-    /// Complete a host-side procedure call without implementing guest BX/BLX interworking.
-    /// The current execution state is retained and only its PC alignment is applied.
+    /// Complete a host-side procedure call. This is not execution of a Guest
+    /// BX/BLX instruction; it retains the current mode and aligns the LR target
+    /// according to that mode.
     public func completeHostCall(returnValue: UInt32) {
         registers[0] = returnValue
         registers[15] = instructionSetState == .arm
