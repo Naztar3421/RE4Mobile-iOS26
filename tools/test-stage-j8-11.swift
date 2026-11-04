@@ -88,7 +88,7 @@ struct StageJ811CoreArchitecturalStateTests {
             try check(snapshot.flags.zero && !snapshot.flags.negative,
                       "MOVS R0,#0 should set Z and clear N")
             try check(snapshot.executionMode == .arm32Interpreter,
-                      "snapshot must identify the ARM-only interpreter mode")
+                      "snapshot must identify the active ARM execution mode")
         }
 
         try test("02 Unmodeled CPSR and VFP fields are explicitly absent, not zero-filled") {
@@ -112,8 +112,9 @@ struct StageJ811CoreArchitecturalStateTests {
                       "all 16 GPRs must match the validated candidate")
             try check(after.flags == candidate.flags, "NZCV must match the candidate")
             try check(receipt.committedGeneralRegisterCount == 16 &&
-                      receipt.committedNZCV,
-                      "commit receipt must describe the modeled writes")
+                      receipt.committedNZCV &&
+                      receipt.committedExecutionMode == .arm32Interpreter,
+                      "commit receipt must describe GPR, NZCV and ARM-mode writes")
             try check(!receipt.restoredFullCPSR &&
                       !receipt.restoredVFPD8ThroughD15 &&
                       !receipt.guestInstructionsExecuted,
@@ -160,18 +161,24 @@ struct StageJ811CoreArchitecturalStateTests {
                       "unaligned SP changed the source state")
         }
 
-        try test("07 Thumb live-context commit remains blocked by the J.8.11 transaction gate") {
+        try test("07 Thumb candidate preflight accepts halfword-aligned PC without mutation") {
             let core = makeCore()
             try seedCore(core)
             let before = try core.captureArchitecturalStateSnapshot()
-            do {
-                _ = try core.prepareArchitecturalStateCommit(
-                    makeCandidate(mode: .thumb16Required))
-                throw NSError(domain: "J8.11", code: 5)
-            } catch RE4StageJ811CommitError.thumbExecutionUnsupported { }
+            let prepared = try core.prepareArchitecturalStateCommit(
+                makeCandidate(mode: .thumb16Required, pc: 0x2002))
+            try check(prepared.executionMode == .thumb16Required,
+                      "validated token lost the requested Thumb execution mode")
             let after = try core.captureArchitecturalStateSnapshot()
             try check(after == before,
-                      "Thumb rejection changed the source state")
+                      "preflight changed live Core state")
+            do {
+                _ = try core.prepareArchitecturalStateCommit(
+                    makeCandidate(mode: .thumb16Required, pc: 0x2003))
+                throw NSError(domain: "J8.11", code: 5)
+            } catch RE4StageJ811CommitError.programCounterNotWordAligned(0x2003) { }
+            try check(try core.captureArchitecturalStateSnapshot() == before,
+                      "invalid Thumb PC changed the source state")
         }
 
         try test("08 Full CPSR restore request is rejected without inventing missing fields") {
@@ -237,9 +244,10 @@ struct StageJ811CoreArchitecturalStateTests {
                       "Core must implement the epilogue's VFP stack path")
         }
 
-        try test("12 J.8.10 Thumb projection maps to a blocked Thumb commit candidate") {
+        try test("12 J.8.10 Thumb projection produces a valid mode-aware candidate") {
             let core = makeCore()
             try seedCore(core)
+            let before = try core.captureArchitecturalStateSnapshot()
             let frame = try makeJ810Frame(pc: 0x55A9)
             let stack = try RE4StageJ89AddressRange(
                 lowerBound: 0x7000, upperBoundExclusive: 0x9000)
@@ -251,10 +259,11 @@ struct StageJ811CoreArchitecturalStateTests {
             let candidate = RE4StageJ811CPUStateCandidate.from(preparedContext: planned)
             try check(candidate.executionMode == .thumb16Required,
                       "Thumb state was lost during J.8.10 to J.8.11 handoff")
-            do {
-                _ = try core.prepareArchitecturalStateCommit(candidate)
-                throw NSError(domain: "J8.11", code: 10)
-            } catch RE4StageJ811CommitError.thumbExecutionUnsupported { }
+            let prepared = try core.prepareArchitecturalStateCommit(candidate)
+            try check(prepared.executionMode == .thumb16Required,
+                      "Thumb mode was not carried into the validated commit token")
+            try check(try core.captureArchitecturalStateSnapshot() == before,
+                      "J.8.10 candidate preflight changed live Core state")
         }
 
         try test("13 Core snapshot refuses malformed live PC rather than normalizing it") {
@@ -267,7 +276,83 @@ struct StageJ811CoreArchitecturalStateTests {
             } catch RE4StageJ811CommitError.programCounterNotWordAligned(0x1002) { }
         }
 
-        print("RESULT: \(passed)/13 passed; 0 failed")
-        print("SCOPE: real Core snapshot + two-phase failure-atomic GPR/NZCV commit; no full CPSR, Thumb execution, VFP D8-D15 restore, or Guest BX.")
+        try test("14 Atomic commit changes ARM Core to Thumb mode together with GPR/NZCV") {
+            let core = makeCore()
+            try seedCore(core)
+            let candidate = makeCandidate(mode: .thumb16Required, pc: 0x2002)
+            let prepared = try core.prepareArchitecturalStateCommit(candidate)
+            try check(core.instructionSetState == .arm,
+                      "preflight changed the live instruction-set state")
+            let receipt = try core.commitArchitecturalStateAtomically(prepared)
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(core.instructionSetState == .thumb &&
+                      after.executionMode == .thumb16Required &&
+                      after.pc == 0x2002,
+                      "ARM-to-Thumb mode/PC commit did not publish together")
+            try check(after.registers == candidate.registers &&
+                      after.flags == candidate.flags &&
+                      receipt.committedExecutionMode == .thumb16Required,
+                      "Thumb mode commit did not include the complete GPR/NZCV candidate")
+            try check(!receipt.restoredFullCPSR &&
+                      !receipt.restoredVFPD8ThroughD15 &&
+                      !receipt.guestInstructionsExecuted,
+                      "Thumb mode receipt overstated CPSR, VFP or Guest execution")
+        }
+
+        try test("15 Atomic commit switches a Thumb Core back to ARM mode") {
+            let core = makeCore()
+            try seedCore(core)
+            let thumb = try core.prepareArchitecturalStateCommit(
+                makeCandidate(mode: .thumb16Required, pc: 0x2002))
+            _ = try core.commitArchitecturalStateAtomically(thumb)
+            let armCandidate = makeCandidate(mode: .arm32Interpreter, pc: 0x3000)
+            let arm = try core.prepareArchitecturalStateCommit(armCandidate)
+            let receipt = try core.commitArchitecturalStateAtomically(arm)
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(core.instructionSetState == .arm &&
+                      after.executionMode == .arm32Interpreter &&
+                      after.pc == 0x3000,
+                      "Thumb-to-ARM mode/PC commit failed")
+            try check(receipt.committedExecutionMode == .arm32Interpreter,
+                      "receipt did not report the committed ARM mode")
+        }
+
+        try test("16 A committed Thumb mode uses 16-bit instruction fetch and Thumb PC advance") {
+            let core = makeCore()
+            try seedCore(core)
+            try core.memory.write16(0x2002, 0x2007) // MOVS R0,#7
+            let thumb = try core.prepareArchitecturalStateCommit(
+                makeCandidate(mode: .thumb16Required, pc: 0x2002))
+            _ = try core.commitArchitecturalStateAtomically(thumb)
+            _ = try core.step()
+            let after = try core.captureArchitecturalStateSnapshot()
+            try check(try core.registerValue(0) == 7,
+                      "Thumb MOVS did not execute after the mode-aware commit")
+            try check(after.executionMode == .thumb16Required && after.pc == 0x2004,
+                      "Thumb fetch must advance the canonical PC by two bytes")
+            try check(!after.flags.zero && !after.flags.negative,
+                      "Thumb MOVS must update the modeled N/Z flags")
+        }
+
+        try test("17 Prepared token becomes stale when only the execution mode changes") {
+            let core = makeCore()
+            try seedCore(core)
+            let staleARM = try core.prepareArchitecturalStateCommit(
+                makeCandidate(mode: .arm32Interpreter, pc: 0x3000))
+            let toThumb = try core.prepareArchitecturalStateCommit(
+                makeCandidate(mode: .thumb16Required, pc: 0x2002))
+            _ = try core.commitArchitecturalStateAtomically(toThumb)
+            let changed = try core.captureArchitecturalStateSnapshot()
+            do {
+                _ = try core.commitArchitecturalStateAtomically(staleARM)
+                throw NSError(domain: "J8.11", code: 12)
+            } catch RE4StageJ811CommitError.sourceStateChangedBeforeCommit { }
+            try check(try core.captureArchitecturalStateSnapshot() == changed &&
+                      core.instructionSetState == .thumb,
+                      "stale ARM token overwrote a newer Thumb execution state")
+        }
+
+        print("RESULT: \(passed)/17 passed; 0 failed")
+        print("SCOPE: real Core snapshot + two-phase failure-atomic GPR/NZCV and ARM/Thumb-mode commit; no full CPSR, no CPU-context VFP injection, and no provider/Res4 BX execution.")
     }
 }
