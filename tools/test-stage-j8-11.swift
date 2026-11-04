@@ -340,12 +340,17 @@ struct StageJ811CoreArchitecturalStateTests {
         try test("17 Prepared token becomes stale when only the execution mode changes") {
             let core = makeCore()
             try seedCore(core)
+            // Keep all 16 GPR values and NZCV identical; only the requested mode differs.
             let staleARM = try core.prepareArchitecturalStateCommit(
-                makeCandidate(mode: .arm32Interpreter, pc: 0x3000))
+                makeCandidate(mode: .arm32Interpreter, pc: 0x2000))
             let toThumb = try core.prepareArchitecturalStateCommit(
-                makeCandidate(mode: .thumb16Required, pc: 0x2002))
+                makeCandidate(mode: .thumb16Required, pc: 0x2000))
             _ = try core.commitArchitecturalStateAtomically(toThumb)
             let changed = try core.captureArchitecturalStateSnapshot()
+            try check(changed.registers == staleARM.expectedSource.registers &&
+                      changed.flags == staleARM.expectedSource.flags &&
+                      changed.executionMode != staleARM.expectedSource.executionMode,
+                      "test precondition failed: source differences must be mode-only")
             do {
                 _ = try core.commitArchitecturalStateAtomically(staleARM)
                 throw NSError(domain: "J8.11", code: 12)
