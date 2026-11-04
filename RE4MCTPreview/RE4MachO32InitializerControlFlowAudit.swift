@@ -86,6 +86,7 @@ public enum RE4MachO32InitializerControlFlowAudit {
     private enum AuditError: Error, LocalizedError {
         case initializerSectionMissing
         case malformed(String)
+        case invalidInitializerPointer(index: Int, raw: UInt32)
         case memoryReadFailed(UInt32)
         case selfTestFailed(String)
 
@@ -95,6 +96,8 @@ public enum RE4MachO32InitializerControlFlowAudit {
                 return "Mach-O has no unambiguous __DATA,__mod_init_func initializer array."
             case .malformed(let detail):
                 return "Malformed initializer control-flow audit input: \(detail)"
+            case .invalidInitializerPointer(let index, let raw):
+                return String(format: "Initializer #%d has unsupported ARM-state function pointer 0x%08X.", index, raw)
             case .memoryReadFailed(let address):
                 return String(format: "Could not read Guest Memory at 0x%08X.", address)
             case .selfTestFailed(let detail):
@@ -849,7 +852,14 @@ public enum RE4MachO32InitializerControlFlowAudit {
         for index in 0..<count {
             let slot = section.address &+ UInt32(index * 4)
             let raw = try readWord(slot, memory: memory)
-            let transition = RE4ARMv6InstructionSetState.resolveBX(from: .arm, registerTarget: raw)
+            let transition: RE4ARMv6StateTransition
+            do {
+                transition = try RE4ARMv6InstructionSetState.resolveBX(
+                    from: .arm, registerTarget: raw
+                )
+            } catch RE4ARMv6InstructionSetStateError.unsupportedARMTargetAlignment(let invalidPointer) {
+                throw AuditError.invalidInitializerPointer(index: index + 1, raw: invalidPointer)
+            }
             let target = transition.targetAddress
             var state = InitializerState()
             state.functionSymbolRanges = functionSymbolRanges
