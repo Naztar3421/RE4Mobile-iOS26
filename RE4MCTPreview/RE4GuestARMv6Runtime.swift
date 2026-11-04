@@ -1087,6 +1087,7 @@ public final class RE4GuestARMv6Core {
             }
             let rawTarget = try reg(rm, pc: pc)
             // Thumb BLX-register links to the next halfword with bit 0 set.
+            let link = isBLX ? ((pc &+ 2) | 1) : nil
             try executeRegisterBranchExchange(rawTarget: rawTarget, linkRegisterValue: link)
             return
         }
