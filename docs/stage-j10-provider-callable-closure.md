@@ -141,7 +141,7 @@ C1 at 0x37496B50 thunks to C2 at 0x37496664. The provider increments shared _S_r
 
 The current explicit HLE set is limited to basic memory/string calls and _exit. It does not include any of the seven imports, pthread primitives, personality, Unwind helpers, _wcslen or C++ delete. Basic malloc/free coverage does not close the target's allocator/C++ delete semantics.
 
-The current CPU core is a bounded ARM instruction subset. It does not implement Thumb CPSR state or a Thumb decoder; BX/BLX target classification is only metadata and does not switch the interpreter into Thumb execution. Therefore even ARM-state addresses are not callable as a complete runtime: import binding alone does not provide provider ABI, TSD, C++ object state, callback contracts or context transfer.
+This paragraph describes the J.10 reviewed baseline (HEAD c95af97) and is superseded by later Core milestones: J.8.13 adds a bounded Thumb-1 fetch/decode path, J.8.14 executes register-form BX/BLX interworking within the Core, and J.8.11 now carries the bounded ARM/Thumb mode through the failure-atomic GPR/NZCV commit transaction (latest implementation commit f3d095d; full CI pending). These changes do not implement a complete CPSR or full ARMv6/Thumb ISA, and they do not make shared-cache provider addresses callable. The seven direct imports remain 0/7 explicit HLE coverage; provider ABI, pthread TSD, C++ object state, callback contracts, personality/unwinder execution and live context transfer remain unresolved.
 
 ## 8. Closure checklist before executable SJLJ work
 
