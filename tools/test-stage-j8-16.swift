@@ -170,7 +170,8 @@ struct StageJ816SyntheticInitializerEpilogueReplayTests {
             try check(vfpAfterFault == vfp && spAfterFault == spBeforeFault &&
                       vfp.d8ThroughD15.allSatisfy { !saved.vfp.contains($0) },
                       "failed VPOP must not partially restore the VFP bank or publish SP")
-            try check(try core.registerValue(15) == 0x5624,
+            let pcAfterFault = try core.registerValue(15)
+            try check(pcAfterFault == 0x5624,
                       "faulting VPOP should leave the Core at its pre-advanced next PC")
         }
 
