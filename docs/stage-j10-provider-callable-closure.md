@@ -211,3 +211,17 @@ established as guest-callable by the synthetic tests. Live pthread TSD,
 callbacks, personality/unwinder, C++ object/allocator closure and original
 context-transfer execution remain unresolved. Global Guest Runtime remains
 **NOT READY TO ENTER**.
+
+
+## 2026-11-05 epilogue replay update
+
+The bounded Core has now replayed the evidence-pinned #101 epilogue sequence
+synthetically: D8-D15 VPOP, R8/R10/R11 restore, R4-R7 restore, saved LR into
+PC, and entry-SP restoration. J.8.16 passed **2/2** plus Release-mode compile
+in GitHub Actions [Run #219](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41982982246).
+The whole J.8.5 umbrella through J.8.16 and unsigned App/IPA packaging passed.
+
+This remains synthetic instruction/data replay; the original provider's
+functions, SJLJ lifecycle and direct imports are not thereby callable. The
+seven direct provider imports remain **0/7 explicit HLE implementations**.
+Global Guest Runtime remains **NOT READY TO ENTER**.

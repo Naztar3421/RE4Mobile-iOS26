@@ -49,3 +49,25 @@ The validator also matches every tested epilogue word against the checked-in evi
 - The Core's bounded instruction subset and modeled NZCV are not a complete ARMv6/CPSR implementation.
 - Overall Guest Runtime readiness remains **NOT READY TO ENTER**.
 
+
+## CI result — 2026-11-05
+
+GitHub Actions [Run #219](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41982982246)
+completed **SUCCESS** on code/test head
+`e51f23bdea48996437d2fa0e102ebda145f27374`.
+
+- J.8.16 synthetic epilogue replay: **2/2 PASS**.
+- J.8.16 Release-mode Swift module compile: **PASS**.
+- The complete J.8.5 umbrella chain through J.8.16: **PASS**.
+- Unsigned iOS Release app build, IPA packaging and artifact upload: **PASS**.
+- Artifact ID: `13394139955`; size: 1,014,831 bytes; SHA-256:
+  `13f2705d26e91a9300e4241aab86b4ca6ecdd7d9305f986237e327706ddf0a01`.
+- Artifact expiry: 2026-11-19.
+
+The two passing cases replay the audited five instruction words over synthetic
+Guest Memory and validate the saved VFP/core register stack payload. The caller
+PC is intercepted by a hook before a fetch. The failed-VPOP case confirms the
+D8-D15 bank and rebased SP are not partially published. No original Res4 bytes,
+provider function, SJLJ Resume, personality, callback, pthread TSD, destructor,
+initializer, or caller code is executed. Global Guest Runtime remains
+**NOT READY TO ENTER**.

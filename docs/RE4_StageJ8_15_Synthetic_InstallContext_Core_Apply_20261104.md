@@ -62,3 +62,20 @@ completed with **SUCCESS** on branch head `c48a27517f62c01d4e9c9fa2cff5ebde7dc3b
 The CI result proves only the bounded synthetic projection/commit/marker path
 specified above. No original provider/game code or runtime lifecycle is run.
 Global Guest Runtime readiness remains **NOT READY TO ENTER**.
+
+
+## J.8.16 epilogue replay follow-up — 2026-11-05
+
+J.8.16 adds a synthetic replay of the five evidence-pinned #101 epilogue
+instructions at 0x561C-0x562C. It validates the actual Core's ordered SP
+rebases, D8-D15 VPOP, R8/R10/R11 pop, R4-R7 pop, saved-LR-to-PC behavior, and
+entry-SP restoration. The final caller PC is intercepted before its next fetch.
+
+GitHub Actions [Run #219](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41982982246)
+completed **SUCCESS**, with J.8.16 **2/2**, Release-mode compile PASS, full
+J.8.5 umbrella through J.8.16 PASS, and unsigned App/IPA packaging PASS.
+Artifact ID `13394139955`; SHA-256
+`13f2705d26e91a9300e4241aab86b4ca6ecdd7d9305f986237e327706ddf0a01`.
+
+This remains synthetic Guest Memory execution, not the original provider or
+game instruction stream. Global runtime readiness remains **NOT READY TO ENTER**.

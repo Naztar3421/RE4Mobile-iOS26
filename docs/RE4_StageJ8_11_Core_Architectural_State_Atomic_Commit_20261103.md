@@ -132,3 +132,14 @@ Artifact ID `13329451033`; SHA-256
 This is not execution of the original provider BX, SJLJ Resume, personality,
 stop callback, pthread TSD, destructor, or initializer. The J.8.10 adapter
 remains data-only. Global Guest Runtime readiness remains **NOT READY TO ENTER**.
+
+
+## Later bounded epilogue validation — 2026-11-05
+
+J.8.16 replays the five evidence-pinned #101 epilogue instructions against
+synthetic Guest code and stack memory, after the J.8.11 mode-aware transaction
+and J.8.15 InstallContext-to-Core gate. The suite passes **2/2** and its
+Release-mode compile passes in GitHub Actions [Run #219](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41982982246).
+The complete J.8.5 umbrella through J.8.16 and unsigned iOS IPA workflow also
+completed **SUCCESS**. This does not execute the original Res4 epilogue bytes,
+provider BX, or the original initializer.

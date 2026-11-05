@@ -114,3 +114,17 @@ J.8.15 executes only a test-authored ARM/Thumb marker in synthetic Guest
 Memory and stops before the next fetch. It does not execute the original
 provider BX or any SJLJ/provider/game function. SJLJ executable runtime
 remains **BLOCKED**; global Guest Runtime remains **NOT READY**.
+
+
+## 2026-11-05 J.8.16 epilogue replay status
+
+J.8.16 adds 2/2 passing synthetic replay tests for the exact 8C148 #101
+five-instruction epilogue sequence (0x561C-0x562C), plus Release-mode compile.
+GitHub Actions [Run #219](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41982982246)
+completed **SUCCESS**, including the J.8.5 umbrella through J.8.16 and
+unsigned iOS app/IPA packaging.
+
+This is evidence-backed Core instruction replay using synthetic code and
+stack contents; it does not execute the original Res4 function or caller.
+SJLJ executable runtime remains **BLOCKED** and global Guest Runtime remains
+**NOT READY TO ENTER**.
