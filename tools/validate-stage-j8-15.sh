@@ -27,3 +27,6 @@ swiftc -parse-as-library -emit-module \
 
 echo "RELEASE-MODE COMPILE: PASS"
 echo "BOUNDARY: synthetic marker instruction only; hook stops before next fetch."
+
+# Stage J.8.16: replay the audited #101 epilogue over a synthetic stack/code image.
+bash "$ROOT/tools/validate-stage-j8-16.sh"
