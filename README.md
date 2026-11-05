@@ -66,7 +66,7 @@ The on-device **Mach-O 32-bit ARM 解析器自測** uses a generated fixture (th
 
 ## Mach-O segment mapper — incremental milestone
 
-`RE4MachO32Loader.swift` maps validated segments at their declared guest virtual addresses, excludes `__PAGEZERO`, clears each full VM range, copies the file-backed prefix, and reports zero-fill bytes. It checks that the entry PC is within a mapped executable segment and refuses invalid memory/file ranges. Segment protections are reported, not enforced.
+`RE4MachO32Loader.swift` maps validated segments at their declared guest virtual addresses, excludes `__PAGEZERO`, clears each full VM range, copies the file-backed prefix, and reports zero-fill bytes. It checks that the entry PC is within a mapped executable segment and refuses invalid memory/file ranges. Initial per-segment R/W/X protections are enforced after segment bytes and zero-fill are installed.
 
 The on-device **Mach-O Segment Mapper 自測** uses a generated asset-free ARMv6 Mach-O fixture to verify `__TEXT`, `__DATA`, `__LINKEDIT` mapping, entry opcodes, zero-fill clearing, file offsets, and rejection when guest memory is too small. **載入 Mach-O 至 Guest Memory** accepts a raw main executable extracted from the app bundle, selects its 32-bit ARM slice and maps it into the 80 MiB guest address space, retaining image and memory for follow-on work. This step does not apply relocations/binds, resolve imports/HLE, run initializers, or execute guest code.
 
@@ -175,3 +175,146 @@ The relocation audit now emits the full sorted record list after its summaries a
 ## One-tap full relocation report export
 
 The relocation audit UI retains its on-screen summary and 25-record pages, and adds a one-tap export action. It regenerates the same read-only audit report and writes one UTF-8 `.txt` file containing export metadata, the entire audit summary, representative records, and the complete sorted relocation inventory. The native iOS share sheet is then presented so the user can save the single file to Files or share it. Export does not apply relocations, alter guest memory, or execute guest code. The report can be regenerated from a freshly loaded Mach-O to establish a clean analysis baseline.
+
+
+## Sparse Guest Memory and pinned iOS 4.2.1 shared cache
+
+The runtime memory model now keeps the original low Guest VA byte array (default 80 MiB) for Res4, heap, stack, return sentinel and existing HLE, and adds independently mounted sparse regions above that range. Sparse regions carry a Guest VA base, length, shared file backing, backing offset, maximum protection and initial protection.
+
+- Multiple regions can reference the same immutable `RE4GuestMemoryBacking`. Writes to writable regions are stored in 4 KiB shadow pages, so the source shared-cache Data is not modified and the DATA mapping does not require copying the entire cache into a second mutable buffer.
+- Data reads/writes and ARM instruction fetches are checked separately. Sparse R-X, R-W and R-only mappings enforce their permissions; writable+executable mappings, overlaps, unmapped gaps and cross-region accesses are rejected.
+- The Mach-O segment mapper applies each main-image segment's initial protection only after its file-backed bytes and zero-fill bytes have been installed. The legacy low memory outside protected Mach-O ranges remains permissive for the existing heap/HLE harness.
+- The pinned iOS 4.2.1 / Build 8C148 / ARMv6 shared-cache mapper validates the exact 166,722,970-byte file SHA-256, cache magic, three mapping-table records, slide metadata and code-signature tail before atomically mounting four sparse ranges: TEXT R-X, DATA R-W, LINKEDIT R-only and code-signature tail R-only.
+- The app exposes **Sparse Guest Memory／R-W-X 權限自測** and **掛載 iOS 4.2.1 ARMv6 shared cache（slide=0）**. Select the extracted `dyld_shared_cache_armv6` file from Files. The importer retains the security-scoped URL while the memory backing is in use.
+
+This milestone is deliberately pinned to **slide=0**. Non-zero slides are rejected until cache slide/fixup processing is implemented. Mounting the shared cache does not itself resolve the 357 indirect-import-only symbols, apply the 1,943 Res4 external relocations, run dyld initializers, register Objective-C/C++ runtime state, or execute guest code. It only makes the verified cache bytes addressable through the sparse Guest Memory API. The 21 dylib providers share one cache backing; the cache is not extracted into 21 duplicated images.
+
+## Stage G — isolated Res4 external-relocation staging
+
+The Stage G control accepts the pinned 31,088-byte Stage D overlay file `RE4_StageD_Relocation_Overlay_Records_LE.bin`. It verifies the overlay SHA-256, the selected Res4 ARMv6 thin-slice SHA-256, the iOS 4.2.1 / 8C148 shared-cache SHA-256, the exact Res4 segment layout, and every relocation's target/file-offset/addend/candidate address against the currently loaded Guest Memory.
+
+Only after all 1,943 live target words match their original on-disk values does it create a new minimal Guest Memory, remap Res4 and the immutable shared-cache backing, apply the relocation words there, and read all 1,943 values back. The final image and unchanged original image are checked against the pinned Stage D baseline and relocated SHA-256 values. The original loaded Guest Memory is never written by this procedure.
+
+To run it on-device:
+1. Mount the verified iOS 4.2.1 Build 8C148 ARMv6 shared cache.
+2. Load the matching Res4 executable into Guest Memory.
+3. Transfer the supplied Stage D overlay `.bin` file into Files and use **Stage G：預檢並隔離套用 1,943 筆 external relocation**.
+4. Select the overlay. On success, the report will show `Stage G isolated external relocation apply PASS`; the detailed 1,943-row read-back CSV can be exported from the app.
+
+This stage does not install the separate 357 indirect-import-only symbols, lazy binds, HLE, dyld initializers, Objective-C/C++ constructors, or execute guest instructions. The relocated image is retained separately as staging memory for the next validation step.
+
+## Stage H — isolated native indirect-import staging (42 non-lazy pointers)
+
+RE4IOS421ImportBindingStager.swift consumes the pinned 672-row Stage H import-site crosswalk CSV. The importer validates the file SHA-256 and 23-column schema, then cross-checks all 672 rows against the parsed Res4 LC_DYSYMTAB indirect-symbol table, nlist symbol indexes, indirect-table indexes, dylib ordinals/dependency paths, section/file offsets, provider cache mappings, cache permissions, and ARM Thumb-state bits. Stub/lazy-pointer pairs are checked by symbol index and embedded literal address.
+
+To run this step on-device:
+1. Complete Stage G successfully, retaining the isolated relocated image.
+2. Select the Stage H import-applier control in the app.
+3. Choose RE4_StageH_Import_Binding_DryRun_672.csv from the Stage H verification package.
+4. On success, export the 42-row non-lazy pointer readback CSV from the app.
+
+Stage H creates a second, fresh Guest Memory and remaps Res4 plus the pinned immutable shared-cache backing. It copies only Stage G's relocated __DATA segment into the new image, verifies the Stage G image hash, and writes exactly 42 candidate pointers into __DATA,__nl_symbol_ptr. The 315 lazy pointers remain 0x00008DD0; all 315 symbol stubs remain byte-for-byte unchanged. It reads back all 42 writes, verifies no byte changed outside those pointer slots, checks the expected final image hash, and rehashes the Stage G input to prove it remained unchanged.
+
+This is isolated native-pointer staging only. It does not modify the original loaded Guest Memory or Stage G memory, does not run the lazy-binding helper, does not execute guest instructions, does not invoke HLE, and does not run initializers or constructors. The staged image is not yet permission to start the game's entry point.
+
+
+## Stage J — isolated ARM/Thumb state model and read-only initializer audit
+
+The standalone `RE4ARMv6InstructionSetState.swift` tests the architectural target-state decision for `BX` and `BLX register`: bit 0 selects Thumb versus ARM, with halfword versus word address alignment. It is a pure address/state model only. It does **not** mutate the interpreter's CPSR, implement a Thumb decoder, or make the guest runtime executable. Synthetic vectors include the Stage I-D Thumb provider pointer and the ARM `_main` address.
+
+`RE4MachO32InitializerAudit.swift` reads the ordered `S_MOD_INIT_FUNC_POINTERS` array from a staged Guest Memory image, checks pointer preservation against the original thin Mach-O bytes, labels ARM/Thumb targets, validates `__TEXT` RX containment, and performs a bounded read-only scan of ARM control-flow evidence. It follows unconditional in-image `B` edges (including common initializer veneers), records direct ARM `BL` targets, maps exact symbol-stub addresses back to imported symbol names, and recursively inspects bounded local callees. The CSV records import call-site counts and unresolved transfers for each initializer. Conditional branch alternatives are recorded but not traversed; indirect calls, exact function extents, inline-data boundaries, Thumb bodies and provider implementations remain explicit unknowns. A bounded linear scan is evidence, not a complete control-flow graph. No guest instruction, initializer, constructor, dyld helper, or HLE trap is invoked.
+
+The on-device Stage J control is enabled only after Stage I-D succeeds in the same app session. It exports a per-initializer CSV and a text report. Host CI uses generated synthetic Mach-O fixtures to validate the state-transition model, ordered initializer parsing, direct local-call evidence, and read-only memory invariant; this does not constitute real-device runtime execution.
+
+
+
+## Stage J.2 — synthetic C++ ABI destructor registry and iostream Init lifecycle model
+
+`RE4CXXRuntimeLifecycleModel.swift` adds two host-only reference models. They do not call provider code, run Guest callbacks, mutate Guest Memory, construct host standard streams, or connect to the ARM interpreter.
+
+### `__cxa_atexit` / `__cxa_finalize` contract model
+
+- Each registration preserves the raw 32-bit function pointer, argument, and DSO handle as separate fields. The low bit is decoded as ARM/Thumb metadata only; the raw pointer is never rewritten and no transfer occurs.
+- Registration returns zero on success and a non-zero result on modeled failure. The exact non-zero value and capacity limit are test-model choices, not target libSystem implementation claims.
+- Finalization plans are DSO-filtered and ordered in reverse registration order. A nil filter means all DSO handles; a zero DSO handle means only entries whose DSO handle is zero.
+- `claimFinalizePlan` marks records before external dispatch would occur, so a repeated or nested planning call cannot re-claim them. A test harness must explicitly mark a claimed record complete after an external callback has returned. The model itself never invokes a callback.
+- The synthetic test covers DSO selection, reverse order, repeated/nested finalization, null-versus-all selection, capacity failure and preservation of a Thumb callback pointer (`0x35E0AFE9`).
+
+The generic Itanium C++ ABI specifies the `__cxa_atexit(f,p,d)` contract, reverse registration order, DSO-filtered `__cxa_finalize`, and at-most-once finalization. It also says the registry representation is implementation-defined and explicitly warns that the document is not authoritative for a particular platform. This model therefore tests the generic contract only; it is not asserted to reproduce Apple's iOS 4.2.1 libSystem implementation.
+
+For the actual Res4 binary, a static ARM instruction/literal calculation at `ExtraProductList` call site `0x521C` yields:
+- callback raw pointer: `0x0019E8F4` (ARM);
+- callback argument: `0`;
+- DSO handle argument: `0x00001000`.
+
+The callback at `0x0019E8F4` statically calls the `std::ios_base::Init` destructor stub at `0x0019FDC0`. The corresponding Stage H / I-C records resolve `__cxa_atexit` to provider pointer `0x35E0AFE9`, marked Thumb. These are static call-site and pointer-resolution facts, not proof that the callback or provider can execute.
+
+### `std::ios_base::Init` reference lifecycle model
+
+A separate model captures the historical GCC 3.4 `ios_init.cc` algorithm as a reference profile:
+- the first instance changes the reference count from 0 to 1, enables C stdio synchronization, constructs narrow standard streams and optionally wide streams, then adds one sentinel reference;
+- subsequent Init instances share the already-constructed standard streams;
+- when a destructor sees a pre-decrement count of 2, it flushes standard output/error/log streams;
+- the sentinel remains, so the standard stream objects are not destroyed by `ios_base::Init::~Init`.
+
+The wide-stream mode is an explicit input because the exact target library build's `_GLIBCXX_USE_WCHAR_T` setting has not yet been proven. The GCC 3.4 source is corroborating reference material, not evidence that the iOS 4.2.1 provider at `0x37496B50` / `0x37496660` has byte-for-byte identical internals. The exact provider implementation still needs static disassembly from the pinned 8C148 shared cache.
+
+Host CI runs both synthetic models. Tests validate state transitions and data plans only; they do not execute callbacks, perform real I/O, run global constructors/destructors, or enable initializer execution. The ARM core remains ARM-only for this project and does not yet implement Thumb CPSR state or Thumb instruction decoding.
+
+
+## Stage J.1 — conditional control-flow worklist and SJLJ/LSDA crosswalk
+
+`RE4MachO32InitializerControlFlowAudit.swift` extends Stage J without changing Stage I-D memory. It reads instructions, symbols, initializer slots and `__gcc_except_tab` only through the read-only Guest Memory interface.
+
+- A bounded worklist follows both successors of direct conditional ARM `B` instructions: the taken target and the fallthrough address. Direct `BL` imports and local callees are recorded as graph edges. Register-derived transfers and other unresolved exits are reported rather than guessed.
+- Function regions are bounded using the nearest defined `N_FUN` / `N_SECT` symbol in `__TEXT,__text`. This is an analysis boundary, not proof of compiler function extents or a complete ARM disassembler.
+- For SJLJ functions, the audit statically resolves the PC-relative LSDA pointer from the function's literal load / PC-add sequence, parses the `__gcc_except_tab` call-site table as ULEB128 `(cs_lp, action)` pairs (with landing-pad dispatch index `cs_lp + 1`), and recovers local stored `call_site` selectors where supported. The selector is compared with the one-based LSDA table-row ordinal.
+- It correlates recovered stored `call_site` selectors with one-based LSDA table-row ordinals (the landing-pad dispatch index is `cs_lp + 1`), and recognizes the shared cleanup block by the bounded branch-over-cleanup / `__Unwind_SjLj_Resume` pattern. Cleanup imports are listed separately from normal and conditional-path imports.
+- It exports three files: per-initializer dependency summary CSV (22-column header), control-flow edge CSV, and SJLJ/LSDA crosswalk CSV, plus the full text report. The dependency summary distinguishes positive SJLJ selector/store-to-direct-BL correlations from distinct LSDA rows matched, and the text report de-duplicates static imported call sites across path labels.
+- The control-flow edge CSV also includes supplementary `exception_cleanup` rows for recognized direct ARM `B/BL` instructions inside the bounded branch-over-cleanup region. The report counts cleanup words inspected and cleanup edges emitted separately. This is not a reconstruction of the incoming landing-pad dispatch edge: indirect or stack-derived transfers and runtime exception selection remain unresolved.
+
+The original `ExtraProductList` initializer provides a useful static cross-check: its function body at `0x5188` registers SJLJ state at `0x51D4`, the LSDA pointer resolves to `0x001C0996`, and the parsed call-site table contains 20 rows. The current host-side original-binary harness records 20 store-to-direct-BL call-site records against 20 LSDA rows, but the crosswalk is not one-to-one: 19 distinct table rows have at least one code-site match, table row 1 remains unmatched, and table row 2 is referenced by two static call instructions at `0x555C` and `0x5588`. A further instruction-level check found `0xFFFF0000` stored to the SJLJ `call_site` field at `0x51FC` before the `ios_base::Init` call at `0x5204`, and `0xFFFFFFFF` stored at `0x560C` before `__Unwind_SjLj_Resume` at `0x5610`. Both signed-negative values are consistent with the no-action handling in the Apple LLVM-GCC 4.2 SJLJ implementation; the exact iOS 4.2.1 provider runtime was not dynamically tested. Row 1 therefore has no observed positive selector in this initializer; row 2 is selected by both calls at `0x555C` and `0x5588`. This is consistent with shared table selection, not proof of runtime exception success or failure. The shared cleanup block `[0x55A8, 0x5614)` contains one static wide-string destructor call site at `0x55FC` and `__Unwind_SjLj_Resume` at `0x5610`. The destructor is in a loop and may execute more than once at runtime; the CSV count is a static call-site count, not a dynamic invocation count. The device readback also showed that the same `__Unwind_SjLj_Unregister` instruction at `0x5618` is reachable under both normal and conditional path labels; this is one static call site, not two. The sum of path-labelled entries may therefore exceed the de-duplicated static import-site total.
+
+Stage J.1 remains static analysis only. It does not call the personality routine, unwinder, landing pad, initializer, constructor, dyld helper, HLE trap, or guest entry point; it performs no Guest Memory writes. Conditional worklist reachability and SJLJ table matches are code/metadata evidence, not proof that runtime exception dispatch succeeds. Indirect calls, data-dependent control flow, Thumb bodies, full ARM semantics, and providers' runtime readiness remain outside scope. Host synthetic tests and host-side analysis of the original binary do not constitute a real-device Stage J.1 readback or a playable runtime.
+
+
+## Stage J.4 — host-only regressions for the actual iOS 4.2.1 providers
+
+A new provider-specific source file, RE4MCTPreview/RE4AppleIOS421CXXABIProviderModel.swift, is compiled by tools/validate-mach-o32.sh and run by tools/test-mach-o32.swift. It is separate from the generic Itanium ABI model and the historical GCC 3.4 iostream reference model retained in RE4CXXRuntimeLifecycleModel.swift.
+
+The libSystem provider model is grounded in the Stage J.3 disassembly:
+- 16-byte kind-2 registration records, an 8-byte block header, 32 records per block, a static first block, and 0x208-byte dynamic blocks prepended at the root.
+- Tests cover the exact 32/33 boundary, the 65-record three-block chain, and global reverse-registration order across block boundaries.
+- A nonzero finalize DSO argument matches only an exactly equal record DSO. A zero finalize argument means no DSO filter and therefore processes all DSOs; it does not select only records whose DSO field is zero.
+- The original kind word is cleared before the callback boundary. The returned plan retains the copied kind/function/argument/DSO fields and the raw ARM/Thumb function pointer.
+- The callback boundary is modeled as outside the registry mutex when threaded. Callback re-entry is represented only by deterministic data injections; newly registered records set the new-registration flag and force a root restart. No callback or closure is executed.
+
+The iOS 4.2.1 libstdc++ provider model uses the observed atomic reference-count transitions:
+- Constructor: increment; only the pre-increment value zero emits the stream-setup events.
+- Destructor: decrement; only the pre-decrement value two emits flush events for cout, cerr, clog, wcout, wcerr, and wclog in that order.
+- The provider-specific model does not add the sentinel reference assumed by the older GCC 3.4 reference profile. That historical model remains in the code only as a separate comparator and is not used as the target-provider result.
+
+These tests are host-only synthetic state/data validation. No provider function, Guest callback, ARM/Thumb instruction, initializer, or real standard I/O operation is executed. Guest Memory, IPA and shared-cache inputs are not modified. Runtime readiness remains NOT READY TO ENTER.
+
+
+## Stage J.9 — SJLJ evidence and readiness review
+
+The bounded Res4 ExtraProductList initializer #101 SJLJ path now has an integrated static-evidence and host-model review. The review covers the pinned personality/LSDA identity, frame/context mapping, normal Resume and Unregister distinction, multi-frame normal Resume, and the forced Resume state model.
+
+- Static profile gate: **PASS WITH RECORDED CROSSWALK LIMIT**. The 20-row LSDA has 19 distinct matched rows and 20 static code-site correlations; row 1 remains unmatched and row 2 has two static call sites.
+- Host-model gate: **PASS**. J.6 through J.8.5 run as separate CI validations; the latest integrated run is [#41498238621](https://github.com/Naztar3421/RE4Mobile-iOS26/actions/runs/41498238621), which also built and packaged the unsigned preview IPA.
+- Executable SJLJ runtime gate: **BLOCKED**. The personality, unwinder, callbacks, live thread-local frame chain, destructor path and CPU context transfer have not been executed.
+- Global Guest Runtime entry gate: **NOT READY**. The bounded #101 model does not resolve the separate loader, import/provider, ARM/Thumb and process-lifecycle requirements.
+
+See [Stage J.9 integration review](docs/stage-j9-sjlj-integration-readiness.md) and [Stage J.9 readiness matrix](docs/stage-j9-sjlj-readiness-matrix.csv) for the full gate-by-gate distinction. A successful host test or unsigned app build is not evidence of a playable runtime.
+
+
+## Stage J.10 — Provider Callable Closure Audit
+
+The read-only Stage J.10 audit inventories the seven direct provider imports seen in the 240-entry initializer analysis, their provider addresses and ARM/Thumb states, Res4 stubs and pointer slots, ARM32 ABI contracts, and current host/Guest implementation coverage. It also maps the SJLJ personality/context helpers, pthread TSD dependencies, forced-unwind stop callback, and C++ wide-string / ios_base::Init cleanup dependencies.
+
+All seven direct import pointers have Stage I-D readback PASS and point into shared-cache TEXT_RX/RX, but none is in the explicit HLE implemented-function set (0/7). The seven symbols account for 502 unique static imported call sites. Host-side J.4/J.6–J.8.5 models cover bounded data/state behavior only; no target provider, callback, pthread operation, destructor, personality, unwinder or Guest instruction is executed.
+
+See [Stage J.10 Provider Callable Closure Audit](docs/stage-j10-provider-callable-closure.md) and [Stage J.10 Provider Dependency Matrix](docs/stage-j10-provider-dependency-matrix.csv) for the per-symbol ABI/state inventory, transitive closure, unresolved provider identities, and closure checklist. The J.7 INSTALL_CONTEXT current-frame/TSD-top correction supersedes earlier wording that implied the frame was unlinked before cleanup.
+
+**Stage J.10 does not change readiness:** executable SJLJ remains BLOCKED and GUEST_RUNTIME_ENTRY_GATE remains NOT READY.

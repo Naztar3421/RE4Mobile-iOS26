@@ -3,6 +3,8 @@ name: Build unsigned iOS preview IPA
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,8 +27,24 @@ jobs:
         run: xcodegen generate
       - name: Validate four synthetic MCT formats byte-for-byte
         run: bash tools/validate-synthetic-mct.sh
-      - name: Validate Mach-O parser, mapper, import plan and HLE binder
+      - name: Validate Mach-O, C++ ABI and Stage J.4 provider regressions
         run: bash tools/validate-mach-o32.sh
+      - name: Validate Stage J.6 SJLJ/personality regressions
+        run: bash tools/validate-stage-j6.sh
+      - name: Validate Stage J.7 landing-pad/context regressions
+        run: bash tools/validate-stage-j7.sh
+      - name: Validate Stage J.8 ARMv6 synthetic context-restore regressions
+        run: bash tools/validate-stage-j8.sh
+      - name: Validate Stage J.8.1 synthetic context integrity regressions
+        run: bash tools/validate-stage-j8-1.sh
+      - name: Validate Stage J.8.2 SJLJ-to-context handoff regressions on branch HEAD
+        run: bash tools/validate-stage-j8-2.sh
+      - name: Validate Stage J.8.3 SJLJ Resume completion-state regressions
+        run: bash tools/validate-stage-j8-3.sh
+      - name: Validate Stage J.8.4 multi-frame SJLJ Resume chain regressions
+        run: bash tools/validate-stage-j8-4.sh
+      - name: Validate Stage J.8.5 forced SJLJ Resume completion regressions
+        run: bash tools/validate-stage-j8-5.sh
       - name: Build unsigned app
         run: |
           set -o pipefail

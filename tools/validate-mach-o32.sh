@@ -4,15 +4,26 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 swiftc "$ROOT/RE4MCTPreview/RE4GuestMemoryReading.swift" \
+       "$ROOT/RE4MCTPreview/RE4GuestMemoryRegions.swift" \
        "$ROOT/RE4MCTPreview/RE4GuestARMv6Runtime.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32Parser.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32Loader.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32ImportBindingPlan.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32HLEBinder.swift" \
+       "$ROOT/RE4MCTPreview/RE4CXXRuntimeLifecycleModel.swift" \
+       "$ROOT/RE4MCTPreview/RE4AppleIOS421CXXABIProviderModel.swift" \
+       "$ROOT/RE4MCTPreview/RE4StageJ4ProviderRegressionModel.swift" \
+       "$ROOT/RE4MCTPreview/RE4StageJ4ProviderRegressionTests.swift" \
        "$ROOT/RE4MCTPreview/RE4ARMv6EntryPreflight.swift" \
+       "$ROOT/RE4MCTPreview/RE4ARMv6InstructionSetState.swift" \
+       "$ROOT/RE4MCTPreview/RE4MachO32InitializerAudit.swift" \
+       "$ROOT/RE4MCTPreview/RE4MachO32InitializerControlFlowAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32PointerFixupAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32LegacyDyldAudit.swift" \
        "$ROOT/RE4MCTPreview/RE4MachO32LegacyRelocationAudit.swift" \
+       "$ROOT/RE4MCTPreview/RE4ExternalRelocationStager.swift" \
+       "$ROOT/RE4MCTPreview/RE4IOS421ImportBindingStager.swift" \
+       "$ROOT/RE4MCTPreview/RE4IOS421LazyPointerStager.swift" \
        "$ROOT/tools/test-mach-o32.swift" \
        -o "$TMP/macho32-test"
-"$TMP/macho32-test"
+"$TMP/macho32-test" "$ROOT/tools/fixtures/RE4_Res4_CXA_J4_240_Registration_Fixture.csv"

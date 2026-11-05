@@ -2,9 +2,20 @@ import Foundation
 
 public enum RE4GuestRuntimeError: Error, LocalizedError {
     case invalidMemoryRange(address: UInt32, count: Int)
+    case memoryProtectionViolation(address: UInt32, count: Int, access: String, region: String)
+    case invalidMemoryRegion(String)
+    case overlappingMemoryRegion(String, String)
+    case writeExecuteRegionDenied(String)
     case heapExhausted
     case invalidRegister(Int)
+    case invalidVFPDoubleRegister(Int)
+    case vfpStackPointerUnderflow(UInt32)
+    case vfpStackPointerOverflow(UInt32)
     case unsupportedInstruction(pc: UInt32, word: UInt32)
+    case unsupportedThumbInstruction(pc: UInt32, halfword: UInt16)
+    case instructionAddressMisaligned(pc: UInt32, instructionSet: String)
+    case unsupportedInstructionSetTransition(pc: UInt32, target: UInt32, source: String, destination: String)
+    case unsupportedARMBranchTargetAlignment(UInt32)
     case stepLimit(limit: Int, pc: UInt32)
     case didNotReturn(pc: UInt32)
 
@@ -12,10 +23,31 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
         switch self {
         case .invalidMemoryRange(let address, let count):
             return String(format: "Guest memory range 0x%08X (+%d) is outside mapped guest memory.", address, count)
+        case .memoryProtectionViolation(let address, let count, let access, let region):
+            return String(format: "Guest memory %@ access at 0x%08X (+%d) is denied by region %@.", access, address, count, region)
+        case .invalidMemoryRegion(let reason):
+            return "Invalid Guest Memory region: \(reason)."
+        case .overlappingMemoryRegion(let first, let second):
+            return "Guest Memory regions overlap: \(first) and \(second)."
+        case .writeExecuteRegionDenied(let name):
+            return "Guest Memory region \(name) requests writable and executable permissions (W^X denied)."
         case .heapExhausted: return "Guest heap exhausted."
+        case .invalidVFPDoubleRegister(let index): return "Invalid VFP double-register index D\(index); only D8-D15 are modeled."
+        case .vfpStackPointerUnderflow(let address):
+            return String(format: "VFP stack push underflows SP=0x%08X.", address)
+        case .vfpStackPointerOverflow(let address):
+            return String(format: "VFP stack pop overflows SP=0x%08X.", address)
         case .invalidRegister(let index): return "Invalid ARM register index \(index)."
         case .unsupportedInstruction(let pc, let word):
             return String(format: "Unsupported ARMv6 instruction 0x%08X at 0x%08X.", word, pc)
+        case .unsupportedThumbInstruction(let pc, let halfword):
+            return String(format: "Unsupported Thumb-1 instruction 0x%04X at 0x%08X.", halfword, pc)
+        case .instructionAddressMisaligned(let pc, let instructionSet):
+            return String(format: "%@ instruction address 0x%08X is misaligned.", instructionSet, pc)
+        case .unsupportedInstructionSetTransition(let pc, let target, let source, let destination):
+            return String(format: "Instruction-set transition %@ -> %@ at 0x%08X (target 0x%08X) is not enabled.", source, destination, pc, target)
+        case .unsupportedARMBranchTargetAlignment(let target):
+            return String(format: "ARMv6 BX/BLX target 0x%08X is not word-aligned; refusing to normalize it.", target)
         case .stepLimit(let limit, let pc):
             return String(format: "ARMv6 step limit %d reached at PC=0x%08X.", limit, pc)
         case .didNotReturn(let pc):
@@ -24,14 +56,29 @@ public enum RE4GuestRuntimeError: Error, LocalizedError {
     }
 }
 
-/// Bounds-checked, little-endian 32-bit guest address space.
-/// All address access is copied through this object; it never returns host pointers.
+/// Bounds-checked low Guest VA plus independently mounted sparse regions.
+/// The original low [0, size) byte array remains the allocator/HLE/Res4 compatibility range.
 public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMapping {
     public let size: Int
     public let stackTop: UInt32
     public let returnSentinel: UInt32
     private var bytes: [UInt8]
     private var heapCursor: UInt32
+    private var sparseRegions: [RE4GuestMemoryRegion] = []
+
+    private struct DenseProtectionRange {
+        let start: UInt64
+        let end: UInt64
+        let protection: RE4GuestMemoryProtection
+        let name: String
+    }
+
+    private var denseProtectionRanges: [DenseProtectionRange] = []
+
+    private enum ResolvedAddress {
+        case dense(Range<Int>)
+        case sparse(RE4GuestMemoryRegion, backingOffset: UInt64)
+    }
 
     public init(size: Int = 0x05000000,
                 heapBase: UInt32 = 0x03100000,
@@ -45,75 +92,235 @@ public final class RE4GuestARMv6Memory: RE4GuestMemoryReading, RE4GuestMemoryMap
         self.bytes = [UInt8](repeating: 0, count: size)
     }
 
-    private func checkedRange(_ address: UInt32, _ count: Int) throws -> Range<Int> {
+    public var sparseRegionCount: Int { sparseRegions.count }
+    public var mountedSparseRegions: [RE4GuestMemoryRegion] { sparseRegions }
+
+    public func hasSparseRegion(named name: String) -> Bool {
+        sparseRegions.contains { $0.name == name }
+    }
+
+    private func resolve(
+        _ address: UInt32,
+        count: Int,
+        required: RE4GuestMemoryProtection
+    ) throws -> ResolvedAddress {
         guard count >= 0 else {
             throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
         }
+
         let start = UInt64(address)
-        let end = start + UInt64(count)
-        guard end >= start, end <= UInt64(size) else {
+        let (end, overflow) = start.addingReportingOverflow(UInt64(count))
+        guard !overflow, end <= (UInt64(UInt32.max) + 1) else {
             throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
         }
-        return Int(start)..<Int(end)
+
+        if end <= UInt64(size) && (start < UInt64(size) || count == 0) {
+            if let protected = denseProtectionRanges.first(where: {
+                start < $0.end && end > $0.start ||
+                (count == 0 && start >= $0.start && start < $0.end)
+            }) {
+                guard start >= protected.start && end <= protected.end else {
+                    throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
+                }
+                guard protected.protection.contains(required) else {
+                    throw RE4GuestRuntimeError.memoryProtectionViolation(
+                        address: address, count: count,
+                        access: required.label, region: protected.name
+                    )
+                }
+            }
+            return .dense(Int(start)..<Int(end))
+        }
+
+        for region in sparseRegions {
+            let regionStart = UInt64(region.guestBase)
+            let regionEnd = region.guestEndExclusive
+            let contained = start >= regionStart && end <= regionEnd &&
+                (count > 0 ? start < regionEnd : start <= regionEnd)
+            guard contained else { continue }
+            guard region.initialProtection.contains(required) else {
+                throw RE4GuestRuntimeError.memoryProtectionViolation(
+                    address: address, count: count,
+                    access: required.label, region: region.name
+                )
+            }
+            return .sparse(region, backingOffset: region.backingOffset + start - regionStart)
+        }
+
+        throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: count)
+    }
+
+    /// Adds a group atomically. Every region must be disjoint from dense memory and all existing/new regions.
+    public func mountRegions(_ newRegions: [RE4GuestMemoryRegion]) throws {
+        guard !newRegions.isEmpty else { return }
+        var candidate = sparseRegions + newRegions
+
+        for region in newRegions {
+            guard !region.name.isEmpty, region.length > 0 else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("empty name or zero length")
+            }
+            let start = UInt64(region.guestBase)
+            let (end, guestOverflow) = start.addingReportingOverflow(region.length)
+            guard !guestOverflow, end > start, end <= UInt64(UInt32.max) + 1 else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("Guest VA overflow in \(region.name)")
+            }
+            guard start >= UInt64(size) else {
+                throw RE4GuestRuntimeError.overlappingMemoryRegion("dense low memory", region.name)
+            }
+            let (backingEnd, backingOverflow) = region.backingOffset.addingReportingOverflow(region.length)
+            guard !backingOverflow, backingEnd <= UInt64(region.backing.byteCount) else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("backing range exceeds source data in \(region.name)")
+            }
+            guard region.initialProtection.isSubset(of: region.maxProtection) else {
+                throw RE4GuestRuntimeError.invalidMemoryRegion("initial protection exceeds max protection in \(region.name)")
+            }
+            guard !(region.initialProtection.contains(.write) && region.initialProtection.contains(.execute)) else {
+                throw RE4GuestRuntimeError.writeExecuteRegionDenied(region.name)
+            }
+        }
+
+        candidate.sort { $0.guestBase < $1.guestBase }
+        for index in 1..<candidate.count {
+            if candidate[index - 1].guestEndExclusive > UInt64(candidate[index].guestBase) {
+                throw RE4GuestRuntimeError.overlappingMemoryRegion(
+                    candidate[index - 1].name, candidate[index].name
+                )
+            }
+        }
+        sparseRegions = candidate
+    }
+
+    public func mountRegion(_ region: RE4GuestMemoryRegion) throws {
+        try mountRegions([region])
+    }
+
+    @discardableResult
+    public func unmountSparseRegion(named name: String) -> Bool {
+        let oldCount = sparseRegions.count
+        sparseRegions.removeAll { $0.name == name }
+        return sparseRegions.count != oldCount
+    }
+
+    /// Applies initial R/W/X permissions to a range in the legacy dense Guest VA.
+    /// Used by the Mach-O segment mapper after all file bytes and zero-fill bytes are installed.
+    public func setProtectionRange(
+        address: UInt32,
+        length: UInt64,
+        protection: RE4GuestMemoryProtection,
+        name: String = "dense-segment"
+    ) throws {
+        let start = UInt64(address)
+        let (end, overflow) = start.addingReportingOverflow(length)
+        guard !overflow, length > 0, end > start, end <= UInt64(size) else {
+            throw RE4GuestRuntimeError.invalidMemoryRegion("dense protection range is outside low Guest Memory")
+        }
+        guard !(protection.contains(.write) && protection.contains(.execute)) else {
+            throw RE4GuestRuntimeError.writeExecuteRegionDenied(name)
+        }
+        if let overlap = denseProtectionRanges.first(where: {
+            start < $0.end && end > $0.start
+        }) {
+            throw RE4GuestRuntimeError.overlappingMemoryRegion(overlap.name, name)
+        }
+        denseProtectionRanges.append(DenseProtectionRange(
+            start: start, end: end, protection: protection, name: name
+        ))
+        denseProtectionRanges.sort { $0.start < $1.start }
     }
 
     public func copyBytes(at guestAddress: UInt32, count: Int) throws -> Data {
-        let range = try checkedRange(guestAddress, count)
-        return Data(bytes[range])
+        switch try resolve(guestAddress, count: count, required: .read) {
+        case .dense(let range):
+            return Data(bytes[range])
+        case .sparse(let region, let backingOffset):
+            return try region.backing.copyBytes(at: backingOffset, count: count)
+        }
     }
 
     public func writeBytes(at guestAddress: UInt32, data: Data) throws {
-        let range = try checkedRange(guestAddress, data.count)
-        bytes.replaceSubrange(range, with: data)
+        switch try resolve(guestAddress, count: data.count, required: .write) {
+        case .dense(let range):
+            bytes.replaceSubrange(range, with: data)
+        case .sparse(let region, let backingOffset):
+            try region.backing.writeBytes(at: backingOffset, data: data)
+        }
     }
 
     public func zeroBytes(at guestAddress: UInt32, count: Int) throws {
-        let range = try checkedRange(guestAddress, count)
-        for index in range { bytes[index] = 0 }
+        guard count >= 0 else {
+            throw RE4GuestRuntimeError.invalidMemoryRange(address: guestAddress, count: count)
+        }
+        try writeBytes(at: guestAddress, data: Data(repeating: 0, count: count))
+    }
+
+    private func readInteger(_ address: UInt32, byteCount: Int, required: RE4GuestMemoryProtection) throws -> UInt32 {
+        switch try resolve(address, count: byteCount, required: required) {
+        case .dense(let range):
+            let p = range.lowerBound
+            if byteCount == 1 { return UInt32(bytes[p]) }
+            if byteCount == 2 {
+                return UInt32(bytes[p]) | (UInt32(bytes[p + 1]) << 8)
+            }
+            return UInt32(bytes[p]) | (UInt32(bytes[p + 1]) << 8) |
+                (UInt32(bytes[p + 2]) << 16) | (UInt32(bytes[p + 3]) << 24)
+        case .sparse(let region, let backingOffset):
+            let raw = [UInt8](try region.backing.copyBytes(at: backingOffset, count: byteCount))
+            if byteCount == 1 { return UInt32(raw[0]) }
+            if byteCount == 2 { return UInt32(raw[0]) | (UInt32(raw[1]) << 8) }
+            return UInt32(raw[0]) | (UInt32(raw[1]) << 8) |
+                (UInt32(raw[2]) << 16) | (UInt32(raw[3]) << 24)
+        }
     }
 
     public func read8(_ address: UInt32) throws -> UInt8 {
-        let r = try checkedRange(address, 1)
-        return bytes[r.lowerBound]
+        UInt8(try readInteger(address, byteCount: 1, required: .read))
     }
 
     public func read16(_ address: UInt32) throws -> UInt16 {
-        let r = try checkedRange(address, 2), p = r.lowerBound
-        return UInt16(bytes[p]) | (UInt16(bytes[p + 1]) << 8)
+        UInt16(try readInteger(address, byteCount: 2, required: .read))
     }
 
     public func read32(_ address: UInt32) throws -> UInt32 {
-        let r = try checkedRange(address, 4), p = r.lowerBound
-        return UInt32(bytes[p]) | (UInt32(bytes[p + 1]) << 8) |
-               (UInt32(bytes[p + 2]) << 16) | (UInt32(bytes[p + 3]) << 24)
+        try readInteger(address, byteCount: 4, required: .read)
+    }
+
+    /// Instruction fetch is distinct from data read and requires execute permission.
+    public func readInstruction16(_ address: UInt32) throws -> UInt16 {
+        UInt16(try readInteger(address, byteCount: 2, required: .execute))
+    }
+
+    public func readInstruction32(_ address: UInt32) throws -> UInt32 {
+        try readInteger(address, byteCount: 4, required: .execute)
     }
 
     public func write8(_ address: UInt32, _ value: UInt8) throws {
-        let r = try checkedRange(address, 1)
-        bytes[r.lowerBound] = value
+        try writeBytes(at: address, data: Data([value]))
     }
 
     public func write16(_ address: UInt32, _ value: UInt16) throws {
-        let r = try checkedRange(address, 2), p = r.lowerBound
-        bytes[p] = UInt8(value & 0xFF)
-        bytes[p + 1] = UInt8((value >> 8) & 0xFF)
+        try writeBytes(at: address, data: Data([
+            UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF)
+        ]))
     }
 
     public func write32(_ address: UInt32, _ value: UInt32) throws {
-        let r = try checkedRange(address, 4), p = r.lowerBound
-        bytes[p] = UInt8(value & 0xFF)
-        bytes[p + 1] = UInt8((value >> 8) & 0xFF)
-        bytes[p + 2] = UInt8((value >> 16) & 0xFF)
-        bytes[p + 3] = UInt8((value >> 24) & 0xFF)
+        try writeBytes(at: address, data: Data([
+            UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF),
+            UInt8((value >> 16) & 0xFF), UInt8((value >> 24) & 0xFF)
+        ]))
     }
 
     public func readCString(_ address: UInt32, limit: Int = 8192) throws -> String {
-        guard limit >= 0 else { throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit) }
+        guard limit >= 0 else {
+            throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit)
+        }
         var output: [UInt8] = []
         output.reserveCapacity(min(limit, 256))
         for offset in 0..<limit {
             let (at, overflow) = address.addingReportingOverflow(UInt32(offset))
-            guard !overflow else { throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit) }
+            guard !overflow else {
+                throw RE4GuestRuntimeError.invalidMemoryRange(address: address, count: limit)
+            }
             let byte = try read8(at)
             if byte == 0 { return String(decoding: output, as: UTF8.self) }
             output.append(byte)
@@ -149,19 +356,222 @@ public struct RE4GuestARMv6RunResult {
     public let steps: Int
     public let registers: [UInt32]
     public let programCounter: UInt32
+    public let instructionSetState: RE4ARMv6InstructionSet
     public let returned: Bool
     public let halted: Bool
     public let exitCode: Int32?
 
     public init(steps: Int, registers: [UInt32], programCounter: UInt32,
+                instructionSetState: RE4ARMv6InstructionSet = .arm,
                 returned: Bool, halted: Bool = false, exitCode: Int32? = nil) {
         self.steps = steps
         self.registers = registers
         self.programCounter = programCounter
+        self.instructionSetState = instructionSetState
         self.returned = returned
         self.halted = halted
         self.exitCode = exitCode
     }
+}
+
+/// Stage J.8.11: the exact GPR/NZCV and bounded ARM/Thumb mode subset owned by this Core.
+/// Kept beside the Core so standalone Core validators compile the same contract.
+public struct RE4StageJ811ConditionFlags: Equatable {
+    public let negative: Bool
+    public let zero: Bool
+    public let carry: Bool
+    public let overflow: Bool
+
+    public init(negative: Bool, zero: Bool, carry: Bool, overflow: Bool) {
+        self.negative = negative
+        self.zero = zero
+        self.carry = carry
+        self.overflow = overflow
+    }
+}
+
+public enum RE4StageJ812VFPError: Error, Equatable {
+    case invalidDoubleRegisterCount(Int)
+}
+
+public struct RE4StageJ812VFPRegisterSnapshot: Equatable {
+    public let d8ThroughD15: [UInt64]
+
+    public init(d8ThroughD15: [UInt64]) throws {
+        guard d8ThroughD15.count == 8 else {
+            throw RE4StageJ812VFPError.invalidDoubleRegisterCount(d8ThroughD15.count)
+        }
+        self.d8ThroughD15 = d8ThroughD15
+    }
+}
+
+public enum RE4StageJ811ExecutionMode: String, Equatable {
+    /// Bounded 32-bit ARM instruction interpreter state.
+    case arm32Interpreter
+    /// Bounded 16-bit Thumb-1 instruction interpreter state.
+    case thumb16Required
+}
+
+public enum RE4StageJ811UnmodeledCPSRState: String, Equatable {
+    /// CPSR fields other than N/Z/C/V do not exist in the current Core model.
+    case notRepresentedByCurrentCore
+}
+
+public enum RE4StageJ811VFPStateCoverage: String, Equatable {
+    case d8ThroughD15NotCaptured
+}
+
+public enum RE4StageJ811CPSRRestoreRequest: String, Equatable {
+    case modeledNZCVOnly
+    case fullCPSR
+}
+
+public enum RE4StageJ811VFPRestoreRequirement: String, Equatable {
+    case notRequired
+    case d8ThroughD15RequiredByGuestEpilogue
+    case d8ThroughD15RequiredInCPUContext
+}
+
+public enum RE4StageJ811CommitError: Error, Equatable {
+    case invalidRegisterFileCount(Int)
+    case programCounterNotWordAligned(UInt32)
+    case stackPointerNotWordAligned(UInt32)
+    case fullCPSRRestoreUnsupported
+    case vfpD8ThroughD15RestoreUnsupported
+    case sourceStateChangedBeforeCommit
+}
+
+/// Immutable snapshot of R0-R15 and N/Z/C/V. Unsupported CPSR and VFP fields
+/// are represented as absent coverage markers, never fabricated bit values.
+public struct RE4StageJ811CPUStateSnapshot: Equatable {
+    public let registers: [UInt32]
+    public let flags: RE4StageJ811ConditionFlags
+    public let executionMode: RE4StageJ811ExecutionMode
+    public let unmodeledCPSRState: RE4StageJ811UnmodeledCPSRState
+    public let vfpStateCoverage: RE4StageJ811VFPStateCoverage
+
+    public var pc: UInt32 { registers[15] }
+    public var sp: UInt32 { registers[13] }
+
+    public init(
+        registers: [UInt32],
+        flags: RE4StageJ811ConditionFlags,
+        executionMode: RE4StageJ811ExecutionMode = .arm32Interpreter
+    ) throws {
+        guard registers.count == 16 else {
+            throw RE4StageJ811CommitError.invalidRegisterFileCount(registers.count)
+        }
+        switch executionMode {
+        case .arm32Interpreter:
+            guard (registers[15] & 0x3) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
+        case .thumb16Required:
+            guard (registers[15] & 0x1) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
+        }
+        guard (registers[13] & 0x3) == 0 else {
+            throw RE4StageJ811CommitError.stackPointerNotWordAligned(registers[13])
+        }
+        self.registers = registers
+        self.flags = flags
+        self.executionMode = executionMode
+        self.unmodeledCPSRState = .notRepresentedByCurrentCore
+        self.vfpStateCoverage = .d8ThroughD15NotCaptured
+    }
+}
+
+/// Untrusted request: intentionally permits malformed input so preflight can
+/// reject it before touching the live Core state.
+public struct RE4StageJ811CPUStateCandidate: Equatable {
+    public let registers: [UInt32]
+    public let flags: RE4StageJ811ConditionFlags
+    public let executionMode: RE4StageJ811ExecutionMode
+    public let cpsrRestoreRequest: RE4StageJ811CPSRRestoreRequest
+    public let vfpRestoreRequirement: RE4StageJ811VFPRestoreRequirement
+
+    public init(
+        registers: [UInt32],
+        flags: RE4StageJ811ConditionFlags,
+        executionMode: RE4StageJ811ExecutionMode,
+        cpsrRestoreRequest: RE4StageJ811CPSRRestoreRequest = .modeledNZCVOnly,
+        vfpRestoreRequirement: RE4StageJ811VFPRestoreRequirement = .notRequired
+    ) {
+        self.registers = registers
+        self.flags = flags
+        self.executionMode = executionMode
+        self.cpsrRestoreRequest = cpsrRestoreRequest
+        self.vfpRestoreRequirement = vfpRestoreRequirement
+    }
+
+    func validate(
+        against source: RE4StageJ811CPUStateSnapshot,
+        supportsGuestEpilogueVFPStackTransfers: Bool
+    ) throws -> RE4StageJ811ValidatedCPUStateCommit {
+        guard registers.count == 16 else {
+            throw RE4StageJ811CommitError.invalidRegisterFileCount(registers.count)
+        }
+        switch executionMode {
+        case .arm32Interpreter:
+            guard (registers[15] & 0x3) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
+        case .thumb16Required:
+            guard (registers[15] & 0x1) == 0 else {
+                throw RE4StageJ811CommitError.programCounterNotWordAligned(registers[15])
+            }
+        }
+        guard (registers[13] & 0x3) == 0 else {
+            throw RE4StageJ811CommitError.stackPointerNotWordAligned(registers[13])
+        }
+        guard cpsrRestoreRequest == .modeledNZCVOnly else {
+            throw RE4StageJ811CommitError.fullCPSRRestoreUnsupported
+        }
+        switch vfpRestoreRequirement {
+        case .notRequired:
+            break
+        case .d8ThroughD15RequiredByGuestEpilogue:
+            guard supportsGuestEpilogueVFPStackTransfers else {
+                throw RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported
+            }
+        case .d8ThroughD15RequiredInCPUContext:
+            throw RE4StageJ811CommitError.vfpD8ThroughD15RestoreUnsupported
+        }
+        return RE4StageJ811ValidatedCPUStateCommit(
+            expectedSource: source, registers: registers, flags: flags,
+            executionMode: executionMode
+        )
+    }
+}
+
+/// Opaque preflight result. Its payload is module-internal.
+public struct RE4StageJ811ValidatedCPUStateCommit {
+    let expectedSource: RE4StageJ811CPUStateSnapshot
+    let registers: [UInt32]
+    let flags: RE4StageJ811ConditionFlags
+    let executionMode: RE4StageJ811ExecutionMode
+
+    init(
+        expectedSource: RE4StageJ811CPUStateSnapshot,
+        registers: [UInt32],
+        flags: RE4StageJ811ConditionFlags,
+        executionMode: RE4StageJ811ExecutionMode
+    ) {
+        self.expectedSource = expectedSource
+        self.registers = registers
+        self.flags = flags
+        self.executionMode = executionMode
+    }
+}
+
+public struct RE4StageJ811CommitReceipt: Equatable {
+    public let committedGeneralRegisterCount: Int
+    public let committedNZCV: Bool
+    public let committedExecutionMode: RE4StageJ811ExecutionMode
+    public let restoredFullCPSR: Bool
+    public let restoredVFPD8ThroughD15: Bool
+    public let guestInstructionsExecuted: Bool
 }
 
 /// Bounded interpreter for the ARM integer/VFP subset observed in the MVP-14/15/18 harness.
@@ -171,6 +581,7 @@ public final class RE4GuestARMv6Core {
     public let memory: RE4GuestARMv6Memory
     public private(set) var registers = [UInt32](repeating: 0, count: 16)
     public private(set) var steps = 0
+    public private(set) var instructionSetState: RE4ARMv6InstructionSet = .arm
     public var instructionHook: InstructionHook?
 
     private var negative = false
@@ -186,6 +597,108 @@ public final class RE4GuestARMv6Core {
         self.instructionHook = instructionHook
     }
 
+    /// Implemented for the bounded ARMv6 Thumb-1 instruction subset in Stage J.8.13.
+    public var supportsThumb16InstructionStepping: Bool { true }
+
+    /// Implemented for the exact D8-D15 VPUSH/VPOP encodings used by #101.
+    public var supportsVFPD8ThroughD15StackTransfers: Bool { true }
+
+    /// D8-D15 map to S16-S31, two consecutive 32-bit words per D register.
+    public func vfpDoubleRegisterValue(_ index: Int) throws -> UInt64 {
+        guard (8...15).contains(index) else {
+            throw RE4GuestRuntimeError.invalidVFPDoubleRegister(index)
+        }
+        let sIndex = 16 + (index - 8) * 2
+        return (UInt64(vfpS[sIndex + 1]) << 32) | UInt64(vfpS[sIndex])
+    }
+
+    public func setVFPDoubleRegisterValue(_ index: Int, value: UInt64) throws {
+        guard (8...15).contains(index) else {
+            throw RE4GuestRuntimeError.invalidVFPDoubleRegister(index)
+        }
+        let sIndex = 16 + (index - 8) * 2
+        vfpS[sIndex] = UInt32(truncatingIfNeeded: value)
+        vfpS[sIndex + 1] = UInt32(truncatingIfNeeded: value >> 32)
+    }
+
+    /// VFP bank snapshot is separate from the J.8.11 GPR/NZCV snapshot.
+    public func captureVFPD8ThroughD15Snapshot() throws -> RE4StageJ812VFPRegisterSnapshot {
+        let values = try (8...15).map { try vfpDoubleRegisterValue($0) }
+        return try RE4StageJ812VFPRegisterSnapshot(d8ThroughD15: values)
+    }
+
+    public func restoreVFPD8ThroughD15Snapshot(
+        _ snapshot: RE4StageJ812VFPRegisterSnapshot
+    ) throws {
+        guard snapshot.d8ThroughD15.count == 8 else {
+            throw RE4StageJ812VFPError.invalidDoubleRegisterCount(snapshot.d8ThroughD15.count)
+        }
+        for (offset, value) in snapshot.d8ThroughD15.enumerated() {
+            let sIndex = 16 + offset * 2
+            vfpS[sIndex] = UInt32(truncatingIfNeeded: value)
+            vfpS[sIndex + 1] = UInt32(truncatingIfNeeded: value >> 32)
+        }
+    }
+
+    /// Captures only the architectural state that this interpreter actually models.
+    /// This is not a complete CPSR image and does not claim to capture VFP D8-D15.
+    public func captureArchitecturalStateSnapshot() throws -> RE4StageJ811CPUStateSnapshot {
+        try RE4StageJ811CPUStateSnapshot(
+            registers: registers,
+            flags: RE4StageJ811ConditionFlags(
+                negative: negative, zero: zero, carry: carry, overflow: overflow
+            ),
+            executionMode: instructionSetState == .arm ? .arm32Interpreter : .thumb16Required
+        )
+    }
+
+    /// Phase 1: validate the complete candidate against the current core state.
+    /// No live Guest CPU field is changed by this method.
+    public func prepareArchitecturalStateCommit(
+        _ candidate: RE4StageJ811CPUStateCandidate
+    ) throws -> RE4StageJ811ValidatedCPUStateCommit {
+        // Both bounded ARM and Thumb execution states are representable by this Core.
+        // The captured source mode becomes part of the stale-token comparison.
+        let source = try captureArchitecturalStateSnapshot()
+        return try candidate.validate(
+            against: source,
+            supportsGuestEpilogueVFPStackTransfers: supportsVFPD8ThroughD15StackTransfers
+        )
+    }
+
+    /// Phase 2: compare the preflight source snapshot, then commit all modeled
+    /// GPRs, NZCV and bounded ARM/Thumb mode. No operation after the first
+    /// assignment can throw.
+    /// The core is single-execution-thread confined; this is failure-atomic, not
+    /// a cross-thread synchronization primitive.
+    @discardableResult
+    public func commitArchitecturalStateAtomically(
+        _ prepared: RE4StageJ811ValidatedCPUStateCommit
+    ) throws -> RE4StageJ811CommitReceipt {
+        let current = try captureArchitecturalStateSnapshot()
+        guard current == prepared.expectedSource else {
+            throw RE4StageJ811CommitError.sourceStateChangedBeforeCommit
+        }
+
+        // All shape, alignment, mode and capability checks have already passed.
+        // These assignments cannot throw, and no Guest instruction is run here.
+        registers = prepared.registers
+        negative = prepared.flags.negative
+        zero = prepared.flags.zero
+        carry = prepared.flags.carry
+        overflow = prepared.flags.overflow
+        instructionSetState = prepared.executionMode == .arm32Interpreter ? .arm : .thumb
+
+        return RE4StageJ811CommitReceipt(
+            committedGeneralRegisterCount: 16,
+            committedNZCV: true,
+            committedExecutionMode: prepared.executionMode,
+            restoredFullCPSR: false,
+            restoredVFPD8ThroughD15: false,
+            guestInstructionsExecuted: false
+        )
+    }
+
     public func registerValue(_ index: Int) throws -> UInt32 {
         guard (0..<16).contains(index) else { throw RE4GuestRuntimeError.invalidRegister(index) }
         return registers[index]
@@ -196,10 +709,14 @@ public final class RE4GuestARMv6Core {
         registers[index] = value
     }
 
-    /// Complete a host-side ARM procedure call and return to the caller's LR.
+    /// Complete a host-side procedure call. This is not execution of a Guest
+    /// BX/BLX instruction; it retains the current mode and aligns the LR target
+    /// according to that mode.
     public func completeHostCall(returnValue: UInt32) {
         registers[0] = returnValue
-        registers[15] = registers[14] & ~3
+        registers[15] = instructionSetState == .arm
+            ? (registers[14] & ~UInt32(3))
+            : (registers[14] & ~UInt32(1))
     }
 
     /// Request termination of the emulated guest only; this never exits or terminates the iOS host app.
@@ -210,7 +727,11 @@ public final class RE4GuestARMv6Core {
 
     private func reg(_ index: Int, pc: UInt32) throws -> UInt32 {
         guard (0..<16).contains(index) else { throw RE4GuestRuntimeError.invalidRegister(index) }
-        return index == 15 ? pc &+ 8 : registers[index]
+        if index != 15 { return registers[index] }
+        switch instructionSetState {
+        case .arm: return pc &+ 8
+        case .thumb: return pc &+ 4
+        }
     }
 
     private func conditionPassed(_ condition: UInt32) -> Bool {
@@ -444,9 +965,52 @@ public final class RE4GuestARMv6Core {
         if let loadedPC { registers[15] = loadedPC }
     }
 
+    /// VPUSH {D8-D15}: VSTMDB SP!, storing ascending D registers at new SP.
+    /// Guest Memory validates the complete 64-byte range before SP is published.
+    private func executeVFPStackPushD8ThroughD15() throws {
+        let oldSP = registers[13]
+        let (newSP, overflow) = oldSP.subtractingReportingOverflow(64)
+        guard !overflow else { throw RE4GuestRuntimeError.vfpStackPointerUnderflow(oldSP) }
+
+        var payload = Data()
+        payload.reserveCapacity(64)
+        for sIndex in 16..<32 {
+            let word = vfpS[sIndex]
+            payload.append(UInt8(word & 0xFF))
+            payload.append(UInt8((word >> 8) & 0xFF))
+            payload.append(UInt8((word >> 16) & 0xFF))
+            payload.append(UInt8((word >> 24) & 0xFF))
+        }
+        try memory.writeBytes(at: newSP, data: payload)
+        registers[13] = newSP
+    }
+
+    /// VPOP {D8-D15}: VLDMIA SP!, stage the complete memory image before apply.
+    private func executeVFPStackPopD8ThroughD15() throws {
+        let oldSP = registers[13]
+        let (newSP, overflow) = oldSP.addingReportingOverflow(64)
+        guard !overflow else { throw RE4GuestRuntimeError.vfpStackPointerOverflow(oldSP) }
+        let payload = [UInt8](try memory.copyBytes(at: oldSP, count: 64))
+        var restored = [UInt32]()
+        restored.reserveCapacity(16)
+        for offset in 0..<16 {
+            let base = offset * 4
+            restored.append(
+                UInt32(payload[base]) |
+                (UInt32(payload[base + 1]) << 8) |
+                (UInt32(payload[base + 2]) << 16) |
+                (UInt32(payload[base + 3]) << 24)
+            )
+        }
+        for offset in 0..<16 {
+            vfpS[16 + offset] = restored[offset]
+        }
+        registers[13] = newSP
+    }
+
     private func executeLegacyVFP(_ word: UInt32, pc: UInt32) throws -> Bool {
-        if word == 0xED2D8B10 { registers[13] = registers[13] &- 64; return true }
-        if word == 0xECBD8B10 { registers[13] = registers[13] &+ 64; return true }
+        if word == 0xED2D8B10 { try executeVFPStackPushD8ThroughD15(); return true }
+        if word == 0xECBD8B10 { try executeVFPStackPopD8ThroughD15(); return true }
         if pc == 0x16B80 && word == 0xED2D8B02 {
             registers[13] = registers[13] &- 8
             try memory.write32(registers[13], vfpS[16])
@@ -483,15 +1047,149 @@ public final class RE4GuestARMv6Core {
         return false
     }
 
+    private func setAddFlags(_ lhs: UInt32, _ rhs: UInt32, result: UInt32, wide: UInt64) {
+        negative = (result & 0x80000000) != 0
+        zero = result == 0
+        carry = wide > UInt64(UInt32.max)
+        overflow = ((~(lhs ^ rhs) & (lhs ^ result)) & 0x80000000) != 0
+    }
+
+    private func setSubFlags(_ lhs: UInt32, _ rhs: UInt32, result: UInt32) {
+        negative = (result & 0x80000000) != 0
+        zero = result == 0
+        carry = lhs >= rhs
+        overflow = (((lhs ^ rhs) & (lhs ^ result)) & 0x80000000) != 0
+    }
+
+    /// Performs the state-selecting PC write shared by A32 and T16 BX/BLX-register.
+    /// The target is validated before LR, PC, or the current instruction state changes.
+    private func executeRegisterBranchExchange(
+        rawTarget: UInt32,
+        linkRegisterValue: UInt32?
+    ) throws {
+        let transition: RE4ARMv6StateTransition
+        do {
+            transition = try RE4ARMv6InstructionSetState.resolveBX(
+                from: instructionSetState,
+                registerTarget: rawTarget
+            )
+        } catch RE4ARMv6InstructionSetStateError.unsupportedARMTargetAlignment(let target) {
+            throw RE4GuestRuntimeError.unsupportedARMBranchTargetAlignment(target)
+        } catch {
+            throw error
+        }
+
+        if let linkRegisterValue {
+            registers[14] = linkRegisterValue
+        }
+        registers[15] = transition.targetAddress
+        instructionSetState = transition.targetState
+    }
+
+    private func executeThumb16(_ instruction: UInt16, pc: UInt32) throws {
+        let branchRegisterOpcode = instruction & 0xFF87
+        if branchRegisterOpcode == 0x4700 || branchRegisterOpcode == 0x4780 {
+            let rm = Int((instruction >> 3) & 0xF)
+            let isBLX = branchRegisterOpcode == 0x4780
+            // ARMv6 Thumb BX permits R15 as a PC+4 source. BLX-register with
+            // R15 is unpredictable in this bounded implementation and fails closed.
+            guard !isBLX || rm != 15 else {
+                throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
+            }
+            let rawTarget = try reg(rm, pc: pc)
+            // Thumb BLX-register links to the next halfword with bit 0 set.
+            let link = isBLX ? ((pc &+ 2) | 1) : nil
+            try executeRegisterBranchExchange(rawTarget: rawTarget, linkRegisterValue: link)
+            return
+        }
+
+        if (instruction & 0xF800) == 0x2000 { // MOVS Rd, #imm8
+            let rd = Int((instruction >> 8) & 0x7)
+            let value = UInt32(instruction & 0x00FF)
+            registers[rd] = value
+            setNZ(value)
+            return
+        }
+        if (instruction & 0xF800) == 0x2800 { // CMP Rd, #imm8
+            let rn = Int((instruction >> 8) & 0x7)
+            let rhs = UInt32(instruction & 0x00FF)
+            let lhs = registers[rn]
+            setSubFlags(lhs, rhs, result: lhs &- rhs)
+            return
+        }
+        if (instruction & 0xF800) == 0x3000 { // ADDS Rd, #imm8
+            let rd = Int((instruction >> 8) & 0x7)
+            let lhs = registers[rd]
+            let rhs = UInt32(instruction & 0x00FF)
+            let wide = UInt64(lhs) + UInt64(rhs)
+            let result = UInt32(truncatingIfNeeded: wide)
+            registers[rd] = result
+            setAddFlags(lhs, rhs, result: result, wide: wide)
+            return
+        }
+        if (instruction & 0xF800) == 0x3800 { // SUBS Rd, #imm8
+            let rd = Int((instruction >> 8) & 0x7)
+            let lhs = registers[rd]
+            let rhs = UInt32(instruction & 0x00FF)
+            let result = lhs &- rhs
+            registers[rd] = result
+            setSubFlags(lhs, rhs, result: result)
+            return
+        }
+        if (instruction & 0xF800) == 0x4800 { // LDR Rt, [PC, #imm8*4]
+            let rt = Int((instruction >> 8) & 0x7)
+            let alignedPC = (pc &+ 4) & ~UInt32(3)
+            let offset = UInt32(instruction & 0x00FF) &* 4
+            let address = alignedPC &+ offset
+            registers[rt] = try memory.read32(address)
+            return
+        }
+        if (instruction & 0xF800) == 0xE000 { // B label
+            let immediate = Int32(instruction & 0x07FF)
+            let signed = (immediate & 0x0400) != 0 ? immediate - 0x0800 : immediate
+            let displacement = signed * 2
+            registers[15] = UInt32(truncatingIfNeeded: Int64(pc) + 4 + Int64(displacement))
+            return
+        }
+        if (instruction & 0xF000) == 0xD000 { // B<cond> label
+            let condition = UInt32((instruction >> 8) & 0xF)
+            guard condition < 0xE else {
+                throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
+            }
+            if conditionPassed(condition) {
+                let immediate = Int32(Int8(bitPattern: UInt8(instruction & 0x00FF)))
+                registers[15] = UInt32(truncatingIfNeeded: Int64(pc) + 4 + Int64(immediate * 2))
+            }
+            return
+        }
+        throw RE4GuestRuntimeError.unsupportedThumbInstruction(pc: pc, halfword: instruction)
+    }
+
     @discardableResult
     public func step() throws -> Bool {
         let pc = registers[15]
         if pc == memory.returnSentinel { return false }
+        let misaligned = instructionSetState == .arm ? (pc & 0x3) != 0 : (pc & 0x1) != 0
+        guard !misaligned else {
+            throw RE4GuestRuntimeError.instructionAddressMisaligned(
+                pc: pc, instructionSet: instructionSetState.rawValue
+            )
+        }
         if let instructionHook, try instructionHook(pc, self) {
             steps += 1
             return true
         }
-        let word = try memory.read32(pc)
+        switch instructionSetState {
+        case .thumb:
+            let halfword = try memory.readInstruction16(pc)
+            registers[15] = pc &+ 2
+            steps += 1
+            try executeThumb16(halfword, pc: pc)
+            return true
+        case .arm:
+            break
+        }
+        let word = try memory.readInstruction32(pc)
         registers[15] = pc &+ 4
         steps += 1
         if !conditionPassed(word >> 28) { return true }
@@ -499,9 +1197,19 @@ public final class RE4GuestARMv6Core {
 
         let pattern = word & 0x0FFFFFF0
         if pattern == 0x012FFF10 || pattern == 0x012FFF30 {
-            let rm = Int(word & 0xF), target = try reg(rm, pc: pc)
-            if pattern == 0x012FFF30 { registers[14] = pc &+ 4 }
-            registers[15] = target & ~3
+            let rm = Int(word & 0xF)
+            let isBLX = pattern == 0x012FFF30
+            // A32 BX PC is architecturally defined; BLX-register with R15 is
+            // unpredictable, so reject it before changing LR or execution mode.
+            guard !isBLX || rm != 15 else {
+                throw RE4GuestRuntimeError.unsupportedInstruction(pc: pc, word: word)
+            }
+            let target = try reg(rm, pc: pc)
+            // A32 BLX-register links to the next ARM word.
+            try executeRegisterBranchExchange(
+                rawTarget: target,
+                linkRegisterValue: isBLX ? (pc &+ 4) : nil
+            )
             return true
         }
         if ((word >> 25) & 7) == 5 {
@@ -533,8 +1241,22 @@ public final class RE4GuestARMv6Core {
         throw RE4GuestRuntimeError.unsupportedInstruction(pc: pc, word: word)
     }
 
-    public func run(entry: UInt32, arguments: [UInt32] = [], maxSteps: Int = 500_000) throws -> RE4GuestARMv6RunResult {
+    public func run(
+        entry: UInt32,
+        arguments: [UInt32] = [],
+        maxSteps: Int = 500_000,
+        initialInstructionSetState: RE4ARMv6InstructionSet = .arm
+    ) throws -> RE4GuestARMv6RunResult {
         guard maxSteps > 0 else { throw RE4GuestRuntimeError.stepLimit(limit: maxSteps, pc: entry) }
+        let misalignedEntry = initialInstructionSetState == .arm
+            ? (entry & 0x3) != 0
+            : (entry & 0x1) != 0
+        guard !misalignedEntry else {
+            throw RE4GuestRuntimeError.instructionAddressMisaligned(
+                pc: entry, instructionSet: initialInstructionSetState.rawValue
+            )
+        }
+        instructionSetState = initialInstructionSetState
         registers = [UInt32](repeating: 0, count: 16)
         steps = 0
         terminationRequested = false
@@ -549,17 +1271,20 @@ public final class RE4GuestARMv6Core {
             if terminationRequested {
                 return RE4GuestARMv6RunResult(
                     steps: steps, registers: registers, programCounter: registers[15],
+                    instructionSetState: instructionSetState,
                     returned: false, halted: true, exitCode: requestedExitCode
                 )
             }
             if registers[15] == memory.returnSentinel {
                 return RE4GuestARMv6RunResult(steps: steps, registers: registers,
-                                              programCounter: registers[15], returned: true)
+                                              programCounter: registers[15],
+                                              instructionSetState: instructionSetState, returned: true)
             }
             _ = try step()
             if terminationRequested {
                 return RE4GuestARMv6RunResult(
                     steps: steps, registers: registers, programCounter: registers[15],
+                    instructionSetState: instructionSetState,
                     returned: false, halted: true, exitCode: requestedExitCode
                 )
             }
@@ -572,7 +1297,8 @@ public final class RE4GuestARMv6Core {
         }
         if registers[15] == memory.returnSentinel {
             return RE4GuestARMv6RunResult(steps: steps, registers: registers,
-                                          programCounter: registers[15], returned: true)
+                                          programCounter: registers[15],
+                                          instructionSetState: instructionSetState, returned: true)
         }
         throw RE4GuestRuntimeError.stepLimit(limit: maxSteps, pc: registers[15])
     }
