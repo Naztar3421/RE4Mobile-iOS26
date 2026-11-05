@@ -162,7 +162,7 @@ struct StageJ816SyntheticInitializerEpilogueReplayTests {
                 _ = try core.step() // VPOP attempts one complete read and fails
                 throw NSError(domain: "J8.16", code: 2)
             } catch RE4GuestRuntimeError.memoryProtectionViolation(
-                address: 0x8048, count: 64, access: "read",
+                address: 0x8048, count: 64, access: "R--",
                 region: "j8-16-unreadable-vfp-save"
             ) { }
             let vfpAfterFault = try core.captureVFPD8ThroughD15Snapshot()
